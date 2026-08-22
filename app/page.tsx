@@ -5,18 +5,21 @@ import {
   applyCombatDamage,
   CARD_LIBRARY,
   CARD_LIBRARY_UPDATED,
+  COMMANDER_BRACKETS,
   counterBacks,
+  DECK_PROFILES,
   generateEvent,
   incomingCommanderDamage,
   incomingDamage,
   KEYWORD_DEFINITIONS,
+  normalizeCommanderBracket,
   opponentCommanderKey,
   PROFILE_LABELS,
   rollDefense,
   userCommanderKey,
+  type CommanderBracket,
   type CommanderSlot,
   type DefenseResult,
-  type Difficulty,
   type Keyword,
   type Opponent,
   type ProfileId,
@@ -37,12 +40,11 @@ type HistoryEntry = {
 };
 
 type GameState = {
-  version: 1;
+  version: 2;
   turn: number;
   eventCounter: number;
   defenseCounter: number;
   seed: string;
-  difficulty: Difficulty;
   opponents: Opponent[];
   userLife: number;
   userCommanderDamage: Record<string, number>;
@@ -74,16 +76,16 @@ const USER_COMMANDER_LABELS = {
 };
 
 const DEFAULT_OPPONENTS: Opponent[] = [
-  { id: "mara", name: "Mara", profile: "graveyard", life: 40, commanderDamage: {}, eliminated: false },
-  { id: "theo", name: "Theo", profile: "control", life: 40, commanderDamage: {}, eliminated: false },
-  { id: "ari", name: "Ari", profile: "swarm", life: 40, commanderDamage: {}, eliminated: false },
+  { id: "mara", name: "Mara", profile: "graveyard", bracket: 3, life: 40, commanderDamage: {}, eliminated: false },
+  { id: "theo", name: "Theo", profile: "control", bracket: 4, life: 40, commanderDamage: {}, eliminated: false },
+  { id: "ari", name: "Ari", profile: "swarm", bracket: 2, life: 40, commanderDamage: {}, eliminated: false },
 ];
 
 function cloneOpponents(opponents: Opponent[]) {
-  return opponents.map((opponent) => ({ ...opponent, commanderDamage: { ...opponent.commanderDamage } }));
+  return opponents.map((opponent) => ({ ...opponent, bracket: normalizeCommanderBracket(opponent.bracket), commanderDamage: { ...opponent.commanderDamage } }));
 }
 
-function createInitialGame(seed = "GILDED-732", opponents = DEFAULT_OPPONENTS, difficulty: Difficulty = "balanced"): GameState {
+function createInitialGame(seed = "GILDED-732", opponents = DEFAULT_OPPONENTS): GameState {
   const safeOpponents = cloneOpponents(opponents);
   const currentEvent = generateEvent({
     turn: 1,
@@ -92,15 +94,13 @@ function createInitialGame(seed = "GILDED-732", opponents = DEFAULT_OPPONENTS, d
     opponents: safeOpponents,
     recentTemplateIds: [],
     activeThreat: false,
-    difficulty,
   });
   return {
-    version: 1,
+    version: 2,
     turn: 1,
     eventCounter: 1,
     defenseCounter: 0,
     seed,
-    difficulty,
     opponents: safeOpponents,
     userLife: 40,
     userCommanderDamage: {},
@@ -124,6 +124,11 @@ function highestCommanderDamage(damage: Record<string, number>) {
   return Math.max(0, ...Object.values(damage));
 }
 
+function bracketLabel(value: unknown) {
+  const bracket = normalizeCommanderBracket(value);
+  return `B${bracket} ${COMMANDER_BRACKETS[bracket].label}`;
+}
+
 function eventKindLabel(event: SimEvent) {
   return {
     targeted: "Single-target interaction",
@@ -132,11 +137,12 @@ function eventKindLabel(event: SimEvent) {
     disruption: "Table disruption",
     attack: "Incoming combat",
     threat: "Game-ending threat",
+    development: "Table development",
   }[event.kind];
 }
 
 function eventGlyph(event: SimEvent) {
-  return { targeted: "↗", wipe: "✺", counter: "↯", disruption: "◇", attack: "⚔", threat: "!" }[event.kind];
+  return { targeted: "↗", wipe: "✺", counter: "↯", disruption: "◇", attack: "⚔", threat: "!", development: "…" }[event.kind];
 }
 
 function Modal({ title, subtitle, onClose, children, wide = false, dismissible = true }: {
@@ -203,7 +209,6 @@ export default function Home() {
   const [combatOpen, setCombatOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [settingsOpponents, setSettingsOpponents] = useState<Opponent[]>([]);
-  const [settingsDifficulty, setSettingsDifficulty] = useState<Difficulty>("balanced");
   const [settingsSeed, setSettingsSeed] = useState("");
 
   const [combatTarget, setCombatTarget] = useState("");
@@ -226,8 +231,10 @@ export default function Home() {
       try {
         const saved = window.localStorage.getItem(STORAGE_KEY);
         if (saved) {
-          const parsed = JSON.parse(saved) as GameState;
-          if (parsed.version === 1 && parsed.currentEvent && Array.isArray(parsed.opponents)) setGame(parsed);
+          const parsed = JSON.parse(saved) as Omit<GameState, "version"> & { version: number };
+          if ((parsed.version === 1 || parsed.version === 2) && parsed.currentEvent && Array.isArray(parsed.opponents)) {
+            setGame({ ...parsed, version: 2, opponents: cloneOpponents(parsed.opponents) });
+          }
         }
       } catch {
         window.localStorage.removeItem(STORAGE_KEY);
@@ -270,6 +277,10 @@ export default function Home() {
   const letEventResolve = useCallback(() => {
     const event = game.currentEvent;
     if (event.kind === "attack") return;
+    if (event.kind === "development") {
+      resolveEvent("Table developed", `${event.sourceName} advances their game plan. Nothing new targets you.`, "neutral");
+      return;
+    }
     if (event.kind === "threat" && event.threat) {
       resolveEvent("Threat established", `${event.sourceName}’s ${event.card} is now on a ${event.threat.remaining}-turn clock.`, "warning", { activeThreat: event.threat });
       return;
@@ -281,7 +292,8 @@ export default function Home() {
     const event = game.currentEvent;
     if ((answer === "counter" || answer === "counter-again") && game.responseStage !== "counterback") {
       const profile = sourceOpponent?.profile ?? "midrange";
-      if (counterBacks({ profile, seed: game.seed, turn: game.turn, counter: game.history.length, difficulty: game.difficulty })) {
+      const bracket = normalizeCommanderBracket(sourceOpponent?.bracket);
+      if (counterBacks({ profile, bracket, seed: game.seed, turn: game.turn, counter: game.history.length })) {
         commit((previous) => ({
           ...previous,
           responseStage: "counterback",
@@ -299,7 +311,7 @@ export default function Home() {
       custom: "You supplied a legal answer and stopped the generated action.",
     };
     resolveEvent("Action answered", labels[answer], "success");
-  }, [commit, game, resolveEvent, sourceOpponent?.profile]);
+  }, [commit, game, resolveEvent, sourceOpponent?.bracket, sourceOpponent?.profile]);
 
   const applyIncoming = useCallback((regularDamage: number, commanderDamage: number, label: string, lifelinkDamage = 0) => {
     const commanderName = game.currentEvent.attackers?.find((attacker) => attacker.isCommander)?.name ?? `${game.currentEvent.sourceName}’s commander`;
@@ -355,7 +367,6 @@ export default function Home() {
         opponents: previous.opponents,
         recentTemplateIds,
         activeThreat: Boolean(activeThreat),
-        difficulty: previous.difficulty,
       });
       return {
         ...previous,
@@ -422,7 +433,6 @@ export default function Home() {
 
   const openSettings = useCallback(() => {
     setSettingsOpponents(cloneOpponents(game.opponents));
-    setSettingsDifficulty(game.difficulty);
     setSettingsSeed(game.seed);
     setSettingsOpen(true);
   }, [game]);
@@ -438,7 +448,6 @@ export default function Home() {
         return {
           ...previous,
           seed,
-          difficulty: settingsDifficulty,
           opponents,
           activeThreat: null,
           gameOver: "You eliminated every simulated opponent.",
@@ -452,12 +461,10 @@ export default function Home() {
         opponents,
         recentTemplateIds: previous.recentTemplateIds,
         activeThreat: Boolean(previous.activeThreat && opponents.some((opponent) => opponent.id === previous.activeThreat?.ownerId)),
-        difficulty: settingsDifficulty,
       });
       return {
         ...previous,
         seed,
-        difficulty: settingsDifficulty,
         opponents,
         eventCounter,
         currentEvent,
@@ -465,11 +472,11 @@ export default function Home() {
         responseStage: "prompt",
         resolution: "",
         activeThreat: previous.activeThreat && opponents.some((opponent) => opponent.id === previous.activeThreat?.ownerId) ? previous.activeThreat : null,
-        history: [historyEntry(previous, "Table updated", "Opponent profiles and pressure settings changed.", "neutral"), ...previous.history].slice(0, 40),
+        history: [historyEntry(previous, "Table updated", "Opponent deck profiles and Commander brackets changed.", "neutral"), ...previous.history].slice(0, 40),
       };
     });
     setSettingsOpen(false);
-  }, [commit, settingsDifficulty, settingsOpponents, settingsSeed]);
+  }, [commit, settingsOpponents, settingsSeed]);
 
   const openCombat = useCallback(() => {
     const firstTarget = game.opponents.find((opponent) => !opponent.eliminated)?.id ?? game.opponents[0]?.id ?? "";
@@ -529,10 +536,10 @@ export default function Home() {
     if (!target || !outgoingAttackers.length) return;
     const result = rollDefense({
       profile: target.profile,
+      bracket: normalizeCommanderBracket(target.bracket),
       seed: game.seed,
       turn: game.turn,
       counter: game.defenseCounter + 1,
-      difficulty: game.difficulty,
       attackers: outgoingAttackers,
     });
     setDefense(result);
@@ -594,9 +601,9 @@ export default function Home() {
     const seed = `CAST-${Date.now().toString(36).slice(-6).toUpperCase()}`;
     undoStack.current = [];
     setCanUndo(false);
-    setGame(createInitialGame(seed, game.opponents.map((opponent) => ({ ...opponent, life: 40, commanderDamage: {}, eliminated: false })), game.difficulty));
+    setGame(createInitialGame(seed, game.opponents.map((opponent) => ({ ...opponent, life: 40, commanderDamage: {}, eliminated: false }))));
     setResetOpen(false);
-  }, [game.difficulty, game.opponents]);
+  }, [game.opponents]);
 
   const maxUserCommanderDamage = highestCommanderDamage(game.userCommanderDamage);
   const tableDefeated = game.opponents.every((opponent) => opponent.eliminated);
@@ -641,7 +648,7 @@ export default function Home() {
             {game.opponents.map((opponent, index) => (
               <article className={`opponent ${opponent.eliminated ? "eliminated" : ""}`} key={opponent.id}>
                 <span className={`avatar avatar-${index + 1}`}>{opponent.name.slice(0, 1).toUpperCase()}</span>
-            <div className="opponent-copy"><strong>{opponent.name}</strong><small>{opponent.eliminated ? "Eliminated" : PROFILE_LABELS[opponent.profile]}</small><CommanderLedger damage={opponent.commanderDamage} labels={USER_COMMANDER_LABELS} /></div>
+            <div className="opponent-copy"><strong>{opponent.name}</strong><small>{opponent.eliminated ? "Eliminated" : `${PROFILE_LABELS[opponent.profile]} · ${bracketLabel(opponent.bracket)}`}</small><CommanderLedger damage={opponent.commanderDamage} labels={USER_COMMANDER_LABELS} /></div>
                 <div className="life-control">
                   <button type="button" onClick={() => adjustLife(opponent.id, -1)} aria-label={`Remove one life from ${opponent.name}`}>−</button>
                   <span className="life" aria-live="polite"><b>{opponent.life}</b><small>life</small></span>
@@ -696,13 +703,22 @@ export default function Home() {
             </div>
 
             <fieldset className="event-fieldset" disabled={game.paused || game.eventStatus === "resolved"}>
-              {game.responseStage === "prompt" && game.currentEvent.kind !== "attack" && (
+              {game.responseStage === "prompt" && game.currentEvent.kind !== "attack" && game.currentEvent.kind !== "development" && (
                 <div className="response-box">
                   <span className="eyebrow">Do you have a response?</span>
                   <div className="response-actions">
                     <button className="primary-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "choose" }))}>Yes, I respond <span>→</span></button>
                     <button className="secondary-button" type="button" onClick={letEventResolve}>No response</button>
                     {game.currentEvent.kind !== "threat" && <button className="text-button" type="button" onClick={() => resolveEvent("Action misses", "No game object was affected, so the generated action has no effect.", "neutral")}>{game.currentEvent.kind === "targeted" || game.currentEvent.kind === "counter" ? "No legal target" : "Nothing affected"}</button>}
+                  </div>
+                </div>
+              )}
+
+              {game.responseStage === "prompt" && game.currentEvent.kind === "development" && (
+                <div className="response-box">
+                  <span className="eyebrow">No new pressure this turn</span>
+                  <div className="response-actions">
+                    <button className="primary-button" type="button" onClick={letEventResolve}>Record development <span>→</span></button>
                   </div>
                 </div>
               )}
@@ -790,7 +806,7 @@ export default function Home() {
                 </div>
               </article>
             ) : (
-              <div className="empty-threat"><span>○</span><strong>No active clock</strong><p>Game-ending threats begin appearing from turn 5.</p></div>
+              <div className="empty-threat"><span>○</span><strong>No active clock</strong><p>Game-ending threat timing follows each opponent’s bracket.</p></div>
             )}
           </section>
 
@@ -813,23 +829,35 @@ export default function Home() {
       </footer>
 
       {settingsOpen && (
-        <Modal title="Set up the table" subtitle="Choose one to three profiles. These shape event mix, attack pressure, counters, and defenses." onClose={() => setSettingsOpen(false)} wide>
+        <Modal title="Set up the table" subtitle="Choose one to three matchup profiles. Each deck package shapes the action mix; its bracket sets pacing and interaction frequency." onClose={() => setSettingsOpen(false)} wide>
           <div className="settings-body">
             <div className="opponent-settings">
-              {settingsOpponents.map((opponent, index) => (
-                <div className="opponent-setting" key={opponent.id}>
-                  <span className={`avatar avatar-${index + 1}`}>{opponent.name.slice(0, 1).toUpperCase() || index + 1}</span>
-                  <label>Name<input value={opponent.name} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, name: event.target.value } : item))} /></label>
-                  <label>Deck profile<select value={opponent.profile} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, profile: event.target.value as ProfileId } : item))}>{Object.entries(PROFILE_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-                  <button className="remove-button" type="button" onClick={() => setSettingsOpponents((current) => current.filter((item) => item.id !== opponent.id))} disabled={settingsOpponents.length === 1} aria-label={`Remove ${opponent.name}`}>Remove</button>
-                </div>
-              ))}
-              <button className="add-opponent" type="button" onClick={() => setSettingsOpponents((current) => [...current, { id: `opponent-${Date.now()}`, name: `Opponent ${current.length + 1}`, profile: "midrange", life: 40, commanderDamage: {}, eliminated: false }])} disabled={settingsOpponents.length >= 3}>+ Add opponent</button>
+              {settingsOpponents.map((opponent, index) => {
+                const profile = DECK_PROFILES[opponent.profile];
+                const bracket = normalizeCommanderBracket(opponent.bracket);
+                const bracketRules = COMMANDER_BRACKETS[bracket];
+                const profileDescriptionId = `profile-description-${opponent.id}`;
+                const bracketDescriptionId = `bracket-description-${opponent.id}`;
+                return (
+                  <fieldset className="opponent-setting" key={opponent.id}>
+                    <legend className="sr-only">Opponent {index + 1}</legend>
+                    <span className={`avatar avatar-${index + 1}`}>{opponent.name.slice(0, 1).toUpperCase() || index + 1}</span>
+                    <label>Name<input value={opponent.name} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, name: event.target.value } : item))} /></label>
+                    <label>Deck profile<select value={opponent.profile} aria-describedby={profileDescriptionId} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, profile: event.target.value as ProfileId } : item))}>{Object.entries(PROFILE_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+                    <label>Commander bracket<select value={bracket} aria-describedby={bracketDescriptionId} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, bracket: Number(event.target.value) as CommanderBracket } : item))}>{Object.entries(COMMANDER_BRACKETS).map(([value, rules]) => <option value={value} key={value}>B{value} {rules.label}</option>)}</select></label>
+                    <button className="remove-button" type="button" onClick={() => setSettingsOpponents((current) => current.filter((item) => item.id !== opponent.id))} disabled={settingsOpponents.length === 1} aria-label={`Remove ${opponent.name}`}>Remove</button>
+                    <div className="profile-setting-copy" id={profileDescriptionId}><p>{profile.description}</p><p><strong>Included cards:</strong> {profile.guaranteedCards.map((card) => card.name).join(" · ")} <span>(in the simulated deck; not guaranteed drawn)</span></p></div>
+                    <p className="bracket-setting-copy" id={bracketDescriptionId}><strong>{bracketLabel(bracket)}:</strong> {bracketRules.summary} {bracketRules.turnGuide}</p>
+                  </fieldset>
+                );
+              })}
+              <button className="add-opponent" type="button" onClick={() => setSettingsOpponents((current) => [...current, { id: `opponent-${Date.now()}`, name: `Opponent ${current.length + 1}`, profile: "midrange", bracket: 3, life: 40, commanderDamage: {}, eliminated: false }])} disabled={settingsOpponents.length >= 3}>+ Add opponent</button>
             </div>
             <div className="session-settings">
-              <label>Pressure level<select value={settingsDifficulty} onChange={(event) => setSettingsDifficulty(event.target.value as Difficulty)}><option value="friendly">Friendly — more breathing room</option><option value="balanced">Typical table</option><option value="punishing">Punishing — sharper answers</option></select></label>
               <label>Session seed<input value={settingsSeed} onChange={(event) => setSettingsSeed(event.target.value.toUpperCase())} maxLength={24} /></label>
               <p>Reuse a seed with the same choices to replay the same event sequence.</p>
+              <div className="bracket-guide"><span className="eyebrow">Bracket guide</span><strong>Official intent, Lab-tuned odds</strong><p>Goldfish Lab translates Wizards’ turn guidance into when pressure and game-ending clocks may appear. It also scales attacks, counters, removal, and defenses as simulation heuristics.</p><ol>{Object.entries(COMMANDER_BRACKETS).map(([value, rules]) => <li key={value}><b>B{value}</b><span>{rules.label}</span><small>{rules.turnGuide}</small></li>)}</ol><a href="https://magic.wizards.com/en/formats/commander" target="_blank" rel="noreferrer">View Wizards’ beta bracket guide ↗</a></div>
+              <p>Profiles are abstract matchup presets, not complete color-identity-checked decklists.</p>
             </div>
           </div>
           <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setSettingsOpen(false)}>Cancel</button><button className="primary-button" type="button" onClick={saveSettings}>Apply and reroll <span>→</span></button></div>
@@ -839,7 +867,7 @@ export default function Home() {
       {combatOpen && (
         <Modal title="Assign your attack" subtitle="Add the creatures you tapped in your playtester, roll one table defense, then confirm damage." onClose={() => setCombatOpen(false)} wide>
           <div className="combat-builder">
-            <label className="target-select">Attack target<select value={combatTarget} onChange={(event) => { setCombatTarget(event.target.value); setDefense(null); }}>{livingOpponents.map((opponent) => <option value={opponent.id} key={opponent.id}>{opponent.name} · {PROFILE_LABELS[opponent.profile]} · {opponent.life} life</option>)}</select></label>
+            <label className="target-select">Attack target<select value={combatTarget} onChange={(event) => { setCombatTarget(event.target.value); setDefense(null); }}>{livingOpponents.map((opponent) => <option value={opponent.id} key={opponent.id}>{opponent.name} · {PROFILE_LABELS[opponent.profile]} · {bracketLabel(opponent.bracket)} · {opponent.life} life</option>)}</select></label>
             <div className="attacker-form">
               <label>Attacker name<input placeholder="e.g. Atraxa" value={attackerName} onChange={(event) => setAttackerName(event.target.value)} /></label>
               <label>Power<input type="number" min="0" value={attackerPower} onChange={(event) => setAttackerPower(Math.max(0, Number(event.target.value)))} /></label>

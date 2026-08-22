@@ -19,7 +19,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   const origin = new URL(`${protocol}://${host}`);
   const title = "Goldfish Lab — Commander Playtest Companion";
-  const description = "A rules-aware companion for stress-testing Magic: The Gathering Commander decks against a simulated table.";
+  const description = "Stress-test Commander decks against bracket-aware matchup profiles, interaction, combat pressure, and countdown threats.";
   const socialImage = new URL("/og.png", origin).toString();
 
   return {

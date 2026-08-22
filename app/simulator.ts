@@ -1,8 +1,8 @@
-export type Difficulty = "friendly" | "balanced" | "punishing";
 export type ProfileId = "midrange" | "control" | "swarm" | "voltron" | "combo" | "graveyard";
-export type EventKind = "targeted" | "wipe" | "counter" | "disruption" | "attack" | "threat";
+export type EventKind = "targeted" | "wipe" | "counter" | "disruption" | "attack" | "threat" | "development";
 export type Keyword = "Flying" | "Reach" | "Trample" | "Menace" | "Vigilance" | "Deathtouch" | "First strike" | "Double strike" | "Haste" | "Lifelink";
 export type CommanderSlot = "primary" | "partner";
+export type CommanderBracket = 1 | 2 | 3 | 4 | 5;
 
 export function opponentCommanderKey(opponentId: string) {
   return `opponent:${opponentId}:commander`;
@@ -16,6 +16,7 @@ export type Opponent = {
   id: string;
   name: string;
   profile: ProfileId;
+  bracket: CommanderBracket;
   life: number;
   commanderDamage: Record<string, number>;
   eliminated: boolean;
@@ -61,12 +62,13 @@ export type DefenseResult = {
 
 type EventTemplate = {
   id: string;
-  kind: Exclude<EventKind, "attack">;
+  kind: Exclude<EventKind, "attack" | "development">;
   minTurn: number;
   title: string;
   prompt: string;
   card: string;
   tags: string[];
+  gameChanger?: boolean;
 };
 
 export const KEYWORD_DEFINITIONS: Record<Keyword, string> = {
@@ -82,28 +84,47 @@ export const KEYWORD_DEFINITIONS: Record<Keyword, string> = {
   Lifelink: "Its controller gains that much life when it deals damage.",
 };
 
-export const PROFILE_LABELS: Record<ProfileId, string> = {
-  midrange: "Generic midrange",
-  control: "Control",
-  swarm: "Creature swarm",
-  voltron: "Voltron",
-  combo: "Combo",
-  graveyard: "Graveyard value",
+export const COMMANDER_BRACKETS: Record<CommanderBracket, {
+  label: string;
+  summary: string;
+  turnGuide: string;
+  turnOffset: number;
+  pace: number;
+  interaction: number;
+  earliestThreatTurn: number;
+  threatClock: number;
+}> = {
+  1: { label: "Exhibition", summary: "Theme-first decks with low-pressure, showcase-focused play.", turnGuide: "Expect at least 9 turns before a player wins or loses.", turnOffset: -2, pace: .68, interaction: .55, earliestThreatTurn: 7, threatClock: 3 },
+  2: { label: "Core", summary: "Straightforward, unoptimized decks with incremental, disruptable wins.", turnGuide: "Expect at least 8 turns before a player wins or loses.", turnOffset: -1, pace: .84, interaction: .76, earliestThreatTurn: 6, threatClock: 3 },
+  3: { label: "Upgraded", summary: "Strong synergy and card quality with frequent proactive and reactive plays.", turnGuide: "Expect at least 6 turns before a player wins or loses.", turnOffset: 0, pace: 1, interaction: 1, earliestThreatTurn: 5, threatClock: 2 },
+  4: { label: "Optimized", summary: "Fast, consistent, explosive decks backed by efficient disruption.", turnGuide: "Expect at least 4 turns before a player wins or loses.", turnOffset: 2, pace: 1.2, interaction: 1.28, earliestThreatTurn: 3, threatClock: 2 },
+  5: { label: "cEDH", summary: "Metagame-tuned competitive decks with efficient wins and razor-thin margins.", turnGuide: "The game could end on any turn.", turnOffset: 4, pace: 1.38, interaction: 1.52, earliestThreatTurn: 1, threatClock: 1 },
 };
 
-const PROFILES: Record<ProfileId, {
+export function normalizeCommanderBracket(value: unknown): CommanderBracket {
+  return value === 1 || value === 2 || value === 3 || value === 4 || value === 5 ? value : 3;
+}
+
+type ProfileCard = { name: string; templateId: string };
+
+export const DECK_PROFILES: Record<ProfileId, {
+  label: string;
+  description: string;
+  guaranteedCards: readonly ProfileCard[];
   combat: number;
   counterBack: number;
-  events: Record<Exclude<EventKind, "attack">, number>;
+  events: Record<Exclude<EventKind, "attack" | "development">, number>;
   defense: [number, number, number, number];
 }> = {
-  swarm: { combat: 1.3, counterBack: .05, events: { targeted: 30, wipe: 8, counter: 2, disruption: 45, threat: 15 }, defense: [35, 50, 10, 5] },
-  voltron: { combat: 1.1, counterBack: .1, events: { targeted: 38, wipe: 8, counter: 7, disruption: 27, threat: 20 }, defense: [42, 25, 23, 10] },
-  midrange: { combat: 1, counterBack: .12, events: { targeted: 32, wipe: 18, counter: 10, disruption: 25, threat: 15 }, defense: [30, 42, 20, 8] },
-  control: { combat: .65, counterBack: .35, events: { targeted: 30, wipe: 24, counter: 28, disruption: 10, threat: 8 }, defense: [18, 22, 35, 25] },
-  combo: { combat: .55, counterBack: .25, events: { targeted: 18, wipe: 10, counter: 25, disruption: 14, threat: 33 }, defense: [35, 18, 27, 20] },
-  graveyard: { combat: .95, counterBack: .08, events: { targeted: 24, wipe: 13, counter: 5, disruption: 36, threat: 22 }, defense: [28, 45, 22, 5] },
+  midrange: { label: "Generic midrange", description: "Flexible value creatures, broad removal, and resilient combat pressure.", guaranteedCards: [{ name: "Beast Within", templateId: "destroy-creature" }, { name: "Wrath of God", templateId: "destroy-wipe" }, { name: "Disrupt Decorum", templateId: "goad" }], combat: 1, counterBack: .12, events: { targeted: 32, wipe: 18, counter: 10, disruption: 25, threat: 15 }, defense: [30, 42, 20, 8] },
+  control: { label: "Control", description: "Permission, efficient removal, and sweepers that punish overextension.", guaranteedCards: [{ name: "Swords to Plowshares", templateId: "exile-commander" }, { name: "Counterspell", templateId: "counter-key-spell" }, { name: "Wrath of God", templateId: "destroy-wipe" }], combat: .65, counterBack: .35, events: { targeted: 30, wipe: 24, counter: 28, disruption: 10, threat: 8 }, defense: [18, 22, 35, 25] },
+  swarm: { label: "Creature swarm", description: "Wide boards, go-wide combat, and an overrun-style closing turn.", guaranteedCards: [{ name: "Nature’s Claim", templateId: "early-rock" }, { name: "Vandalblast", templateId: "artifact-sweep" }, { name: "Craterhoof Behemoth", templateId: "combat-clock" }], combat: 1.3, counterBack: .05, events: { targeted: 30, wipe: 8, counter: 2, disruption: 45, threat: 15 }, defense: [35, 50, 10, 5] },
+  voltron: { label: "Voltron", description: "One oversized attacker protected by lean interaction and tempo plays.", guaranteedCards: [{ name: "Swords to Plowshares", templateId: "exile-commander" }, { name: "Anguished Unmaking", templateId: "remove-engine" }, { name: "Disrupt Decorum", templateId: "goad" }], combat: 1.1, counterBack: .1, events: { targeted: 38, wipe: 8, counter: 7, disruption: 27, threat: 20 }, defense: [42, 25, 23, 10] },
+  combo: { label: "Combo", description: "A compact win package protected by stack interaction and bounce.", guaranteedCards: [{ name: "Counterspell", templateId: "counter-key-spell" }, { name: "Aetherflux Reservoir", templateId: "artifact-clock" }, { name: "Anguished Unmaking", templateId: "remove-engine" }], combat: .55, counterBack: .25, events: { targeted: 18, wipe: 10, counter: 25, disruption: 14, threat: 33 }, defense: [35, 18, 27, 20] },
+  graveyard: { label: "Graveyard value", description: "Recursive threats, death triggers, and mass reanimation pressure.", guaranteedCards: [{ name: "Living Death", templateId: "living-death" }, { name: "Bojuka Bog", templateId: "graveyard-hate" }, { name: "Beast Within", templateId: "destroy-creature" }], combat: .95, counterBack: .08, events: { targeted: 24, wipe: 13, counter: 5, disruption: 36, threat: 22 }, defense: [28, 45, 22, 5] },
 };
+
+export const PROFILE_LABELS = Object.fromEntries(Object.entries(DECK_PROFILES).map(([id, profile]) => [id, profile.label])) as Record<ProfileId, string>;
 
 export const CARD_LIBRARY_UPDATED = "August 18, 2026";
 
@@ -116,24 +137,25 @@ export const CARD_LIBRARY = [
   { archetype: "Graveyard pressure", cards: ["Bojuka Bog", "Rest in Peace", "Living Death", "Reanimate"] },
 ] as const;
 
-const TEMPLATES: EventTemplate[] = [
+export const EVENT_TEMPLATES: EventTemplate[] = [
   { id: "early-rock", kind: "targeted", minTurn: 1, title: "Your early mana is checked.", prompt: "Destroy your most useful mana rock or mana creature. If there is no legal target, let the table action miss.", card: "Nature’s Claim", tags: ["Destroy", "Mana"] },
   { id: "destroy-creature", kind: "targeted", minTurn: 2, title: "Your best creature is targeted.", prompt: "Destroy your highest-power noncommander creature. Counter, protect it, or let the spell resolve.", card: "Beast Within", tags: ["Destroy", "Creature"] },
   { id: "exile-commander", kind: "targeted", minTurn: 3, title: "Exile your commander.", prompt: "Your commander is targeted by an exile effect. If it leaves, make the normal command-zone choice in your playtester.", card: "Swords to Plowshares", tags: ["Exile", "Commander"] },
   { id: "remove-engine", kind: "targeted", minTurn: 3, title: "Your engine is exposed.", prompt: "Exile your most important artifact or enchantment. Can you counter, protect, sacrifice, or otherwise save it?", card: "Anguished Unmaking", tags: ["Exile", "Permanent"] },
   { id: "destroy-wipe", kind: "wipe", minTurn: 5, title: "Destroy all creatures.", prompt: "A board wipe goes on the stack. Indestructible creatures survive; can you counter it or protect your board?", card: "Wrath of God", tags: ["Board wipe", "Destroy"] },
   { id: "minus-wipe", kind: "wipe", minTurn: 5, title: "The board gets −X/−X.", prompt: "Give each creature you control −X/−X until end of turn, where X is the greatest toughness among them. Indestructible does not stop this.", card: "Toxic Deluge", tags: ["Board wipe", "Toughness"] },
-  { id: "mass-bounce", kind: "wipe", minTurn: 6, title: "Return your nonlands to hand.", prompt: "Return each nonland permanent you control to its owner’s hand unless you can stop the overloaded spell.", card: "Cyclonic Rift", tags: ["Board wipe", "Bounce"] },
-  { id: "exile-wipe", kind: "wipe", minTurn: 7, title: "Exile the battlefield.", prompt: "Exile creatures, artifacts, and enchantments you control. Indestructible does not prevent exile.", card: "Farewell", tags: ["Board wipe", "Exile"] },
+  { id: "living-death", kind: "wipe", minTurn: 5, title: "The battlefield and graveyards trade places.", prompt: "Exile creature cards from graveyards, sacrifice creatures, then return the exiled cards. Resolve the exact Living Death sequence in your playtester.", card: "Living Death", tags: ["Board wipe", "Graveyard"] },
+  { id: "mass-bounce", kind: "wipe", minTurn: 6, title: "Return your nonlands to hand.", prompt: "Return each nonland permanent you control to its owner’s hand unless you can stop the overloaded spell.", card: "Cyclonic Rift", tags: ["Board wipe", "Bounce"], gameChanger: true },
+  { id: "exile-wipe", kind: "wipe", minTurn: 7, title: "Exile the battlefield.", prompt: "Exile creatures, artifacts, and enchantments you control. Indestructible does not prevent exile.", card: "Farewell", tags: ["Board wipe", "Exile"], gameChanger: true },
   { id: "counter-key-spell", kind: "counter", minTurn: 2, title: "Your next key spell is countered.", prompt: "When you cast your next mana-value-4-or-greater spell this turn, the table tries to counter it.", card: "Counterspell", tags: ["Counter", "Stack"] },
-  { id: "counter-commander", kind: "counter", minTurn: 3, title: "Your commander meets permission.", prompt: "The next time you cast your commander this turn, the table tries to counter that spell.", card: "Fierce Guardianship", tags: ["Counter", "Commander"] },
+  { id: "counter-commander", kind: "counter", minTurn: 3, title: "Your commander meets permission.", prompt: "The next time you cast your commander this turn, the table tries to counter that spell.", card: "Arcane Denial", tags: ["Counter", "Commander"] },
   { id: "random-discard", kind: "disruption", minTurn: 2, title: "Discard at random.", prompt: "Randomize the nonland cards in your hand and discard one of them.", card: "Wheel pressure", tags: ["Discard", "Hand"] },
   { id: "graveyard-hate", kind: "disruption", minTurn: 3, title: "Exile your graveyard.", prompt: "Exile your graveyard before your next graveyard effect resolves. Can you save or use anything first?", card: "Bojuka Bog", tags: ["Exile", "Graveyard"] },
   { id: "artifact-sweep", kind: "disruption", minTurn: 5, title: "Destroy your artifacts.", prompt: "Destroy each artifact you control. Mana rocks, Equipment, Treasures, and artifact creatures are all caught.", card: "Vandalblast", tags: ["Destroy", "Artifacts"] },
   { id: "goad", kind: "disruption", minTurn: 4, title: "Your strongest creature is goaded.", prompt: "Your highest-power creature must attack a player other than the acting opponent next combat, if able.", card: "Disrupt Decorum", tags: ["Goad", "Combat"] },
-  { id: "combo-clock", kind: "threat", minTurn: 5, title: "A two-card win is assembling.", prompt: "A compact combo is telegraphed. Remove a piece, stop the tutor, or prepare stack interaction before the clock expires.", card: "Thassa’s Oracle line", tags: ["Game-ending", "Combo"] },
-  { id: "artifact-clock", kind: "threat", minTurn: 6, title: "A lethal artifact is charging.", prompt: "An artifact engine will produce a game-ending activation when its countdown reaches zero.", card: "Aetherflux Reservoir", tags: ["Game-ending", "Artifact"] },
-  { id: "combat-clock", kind: "threat", minTurn: 5, title: "A lethal combat turn is coming.", prompt: "The creature deck is building a lethal overrun. Remove the enabler or hold up a fog before the countdown expires.", card: "Craterhoof Behemoth", tags: ["Game-ending", "Combat"] },
+  { id: "combo-clock", kind: "threat", minTurn: 1, title: "A two-card win is assembling.", prompt: "A compact combo is telegraphed. Remove a piece, stop the tutor, or prepare stack interaction before the clock expires.", card: "Thassa’s Oracle line", tags: ["Game-ending", "Combo"], gameChanger: true },
+  { id: "artifact-clock", kind: "threat", minTurn: 1, title: "A lethal artifact is charging.", prompt: "An artifact engine will produce a game-ending activation when its countdown reaches zero.", card: "Aetherflux Reservoir", tags: ["Game-ending", "Artifact"] },
+  { id: "combat-clock", kind: "threat", minTurn: 1, title: "A lethal combat turn is coming.", prompt: "The creature deck is building a lethal overrun. Remove the enabler or hold up a fog before the countdown expires.", card: "Craterhoof Behemoth", tags: ["Game-ending", "Combat"] },
 ];
 
 function hashSeed(value: string) {
@@ -188,13 +210,30 @@ function attackBand(turn: number) {
   return { chance: .9, count: [4, 8], power: [22, Math.min(60, 40 + (turn - 10) * 3)], keyword: .7 };
 }
 
-function generateAttack(random: () => number, turn: number, source: Opponent, difficulty: Difficulty, eventId: string): Attacker[] {
+export function eventKindWeights(input: { turn: number; profile: ProfileId; bracket: CommanderBracket; activeThreat: boolean }): Record<EventKind, number> {
+  const bracket = normalizeCommanderBracket(input.bracket);
+  const bracketRules = COMMANDER_BRACKETS[bracket];
+  const profile = DECK_PROFILES[input.profile];
+  const effectiveTurn = Math.max(1, input.turn + bracketRules.turnOffset);
+  const eligibleKinds = new Set(EVENT_TEMPLATES.filter((template) => template.minTurn <= effectiveTurn && (bracket >= 3 || !template.gameChanger)).map((template) => template.kind));
+  const interactionScale = bracketRules.interaction ** 4;
+  return {
+    targeted: eligibleKinds.has("targeted") ? profile.events.targeted * interactionScale : 0,
+    wipe: eligibleKinds.has("wipe") ? profile.events.wipe * interactionScale : 0,
+    counter: eligibleKinds.has("counter") ? profile.events.counter * interactionScale : 0,
+    disruption: eligibleKinds.has("disruption") ? profile.events.disruption * bracketRules.pace : 0,
+    attack: attackBand(effectiveTurn).chance * profile.combat * (bracketRules.pace ** 3) * 35,
+    threat: !input.activeThreat && input.turn >= bracketRules.earliestThreatTurn && eligibleKinds.has("threat") ? profile.events.threat * bracketRules.pace : 0,
+    development: ({ 1: 70, 2: 55, 3: 40, 4: 25, 5: 10 } as Record<CommanderBracket, number>)[bracket],
+  };
+}
+
+function generateAttack(random: () => number, turn: number, source: Opponent, pace: number, eventId: string): Attacker[] {
   const band = attackBand(turn);
-  const profile = PROFILES[source.profile];
-  const difficultyScale = difficulty === "friendly" ? .82 : difficulty === "punishing" ? 1.18 : 1;
+  const profile = DECK_PROFILES[source.profile];
   const count = intBetween(random, band.count[0], band.count[1]);
   const rawTotal = intBetween(random, band.power[0], band.power[1]);
-  const totalPower = Math.max(count, Math.round(rawTotal * profile.combat * difficultyScale));
+  const totalPower = Math.max(count, Math.round(rawTotal * profile.combat * pace));
   const weights = Array.from({ length: count }, () => .55 + random());
   const weightTotal = weights.reduce((sum, value) => sum + value, 0);
   const powers = weights.map((weight) => Math.max(1, Math.floor(totalPower * weight / weightTotal)));
@@ -246,20 +285,24 @@ export function generateEvent(input: {
   opponents: Opponent[];
   recentTemplateIds: string[];
   activeThreat: boolean;
-  difficulty: Difficulty;
 }): SimEvent {
-  const { turn, counter, seed, recentTemplateIds, activeThreat, difficulty } = input;
+  const { turn, counter, seed, recentTemplateIds, activeThreat } = input;
   const livingOpponents = input.opponents.filter((opponent) => !opponent.eliminated);
   if (!livingOpponents.length) throw new Error("Cannot generate an event without a living opponent.");
   const random = rngFor(`${seed}:${turn}:${counter}`);
   const source = livingOpponents[intBetween(random, 0, livingOpponents.length - 1)];
-  const profile = PROFILES[source.profile];
-  const band = attackBand(turn);
-  const difficultyChance = difficulty === "friendly" ? .78 : difficulty === "punishing" ? 1.14 : 1;
+  const profile = DECK_PROFILES[source.profile];
+  const bracket = normalizeCommanderBracket(source.bracket);
+  const bracketRules = COMMANDER_BRACKETS[bracket];
+  const effectiveTurn = Math.max(1, turn + bracketRules.turnOffset);
   const eventId = `event-${turn}-${counter}`;
 
-  if (random() < Math.min(.95, band.chance * profile.combat * difficultyChance)) {
-    const attackers = generateAttack(random, turn, source, difficulty, eventId);
+  const isEligible = (template: EventTemplate) => template.minTurn <= effectiveTurn && (bracket >= 3 || !template.gameChanger);
+  const eventWeights = eventKindWeights({ turn, profile: source.profile, bracket, activeThreat });
+  const kind = weightedPick(random, eventWeights);
+
+  if (kind === "attack") {
+    const attackers = generateAttack(random, effectiveTurn, source, bracketRules.pace, eventId);
     return {
       id: eventId,
       templateId: "scaled-attack",
@@ -269,23 +312,31 @@ export function generateEvent(input: {
       title: `${source.name} sends ${attackers.length === 1 ? "an attacker" : `${attackers.length} attackers`} at you.`,
       prompt: "Declare blocks or interaction in your playtester, then record the combat damage that gets through.",
       card: `${PROFILE_LABELS[source.profile]} combat`,
-      tags: ["Combat", `Turn ${turn} scaling`],
+      tags: ["Combat", `B${bracket} ${bracketRules.label}`, `Turn ${turn} scaling`],
       attackers,
     };
   }
 
-  const eventWeights = { ...profile.events };
-  if (turn < 5 || activeThreat) eventWeights.threat = 0;
-  if (turn < 5) eventWeights.wipe = Math.min(eventWeights.wipe, 2);
-  let kind = weightedPick(random, eventWeights);
-  let candidates = TEMPLATES.filter((template) => template.kind === kind && template.minTurn <= turn && !recentTemplateIds.includes(template.id));
-  if (!candidates.length) candidates = TEMPLATES.filter((template) => template.kind === kind && template.minTurn <= turn);
-  if (!candidates.length) {
-    kind = "targeted";
-    candidates = TEMPLATES.filter((template) => template.kind === kind && template.minTurn <= turn);
+  if (kind === "development") {
+    return {
+      id: eventId,
+      templateId: "table-development",
+      kind,
+      sourceId: source.id,
+      sourceName: source.name,
+      title: `${source.name} develops their game plan.`,
+      prompt: "No spell or attacker is aimed at you this turn. Use the breathing room to advance your own plan.",
+      card: `${PROFILE_LABELS[source.profile]} setup`,
+      tags: ["Development", `B${bracket} ${bracketRules.label}`],
+    };
   }
+
+  let candidates = EVENT_TEMPLATES.filter((template) => template.kind === kind && isEligible(template) && !recentTemplateIds.includes(template.id));
+  if (!candidates.length) candidates = EVENT_TEMPLATES.filter((template) => template.kind === kind && isEligible(template));
+  const guaranteedIds = new Set(profile.guaranteedCards.map((card) => card.templateId));
+  const guaranteedCandidates = candidates.filter((template) => guaranteedIds.has(template.id));
+  if (guaranteedCandidates.length) candidates = guaranteedCandidates;
   const template = candidates[intBetween(random, 0, candidates.length - 1)];
-  const threatTurns = turn <= 6 ? 3 : turn <= 9 ? 2 : intBetween(random, 1, 2);
 
   return {
     id: eventId,
@@ -296,36 +347,37 @@ export function generateEvent(input: {
     title: template.title,
     prompt: template.prompt,
     card: template.card,
-    tags: template.tags,
+    tags: [...template.tags, `B${bracket} ${bracketRules.label}`],
     threat: template.kind === "threat" ? {
       id: `threat-${turn}-${counter}`,
       ownerId: source.id,
       title: template.title,
       description: template.prompt,
-      remaining: threatTurns,
+      remaining: bracketRules.threatClock,
       delayed: false,
     } : undefined,
   };
 }
 
-export function counterBacks(input: { profile: ProfileId; seed: string; turn: number; counter: number; difficulty: Difficulty }) {
-  const difficultyScale = input.difficulty === "friendly" ? .7 : input.difficulty === "punishing" ? 1.25 : 1;
-  return rngFor(`${input.seed}:counter:${input.turn}:${input.counter}`)() < Math.min(.6, PROFILES[input.profile].counterBack * difficultyScale);
+export function counterBacks(input: { profile: ProfileId; bracket: CommanderBracket; seed: string; turn: number; counter: number }) {
+  const interaction = COMMANDER_BRACKETS[normalizeCommanderBracket(input.bracket)].interaction;
+  return rngFor(`${input.seed}:counter:${input.turn}:${input.counter}`)() < Math.min(.8, DECK_PROFILES[input.profile].counterBack * interaction);
 }
 
 export function rollDefense(input: {
   profile: ProfileId;
+  bracket: CommanderBracket;
   seed: string;
   turn: number;
   counter: number;
-  difficulty: Difficulty;
   attackers: { name: string; power: number; keywords: Keyword[] }[];
 }): DefenseResult {
   const random = rngFor(`${input.seed}:defense:${input.turn}:${input.counter}:${input.profile}`);
-  const [none, block, removal, fog] = PROFILES[input.profile].defense;
-  const turnFactor = input.turn <= 2 ? .45 : input.turn <= 4 ? .75 : input.turn >= 10 ? 1.1 : 1;
-  const difficultyFactor = input.difficulty === "friendly" ? .75 : input.difficulty === "punishing" ? 1.16 : 1;
-  const activeChance = Math.min(.85, (1 - none / 100) * turnFactor * difficultyFactor);
+  const bracketRules = COMMANDER_BRACKETS[normalizeCommanderBracket(input.bracket)];
+  const [none, block, removal, fog] = DECK_PROFILES[input.profile].defense;
+  const effectiveTurn = Math.max(1, input.turn + bracketRules.turnOffset);
+  const turnFactor = effectiveTurn <= 2 ? .45 : effectiveTurn <= 4 ? .75 : effectiveTurn >= 10 ? 1.1 : 1;
+  const activeChance = Math.min(.92, (1 - none / 100) * turnFactor * bracketRules.interaction);
   if (random() >= activeChance) return { type: "none", title: "No response", detail: "The defending player has no relevant interaction. Resolve combat normally." };
   const type = weightedPick(random, { block, removal, fog });
   if (type === "removal") {
@@ -333,7 +385,7 @@ export function rollDefense(input: {
     return { type, title: "Spot removal", detail: `${target?.name ?? "Your largest attacker"} is targeted before combat damage. You may answer the removal.` };
   }
   if (type === "fog") return { type, title: "Fog effect", detail: "Prevent all combat damage this combat unless you can stop the effect." };
-  const blockerCount = Math.min(4, 1 + Math.floor((input.turn - 1) / 4));
+  const blockerCount = Math.min(4, 1 + Math.floor((effectiveTurn - 1) / 4));
   const needsReach = input.attackers.some((attacker) => attacker.keywords.includes("Flying"));
   return { type, title: `${blockerCount} ${blockerCount === 1 ? "blocker" : "blockers"}`, detail: `The opponent commits ${blockerCount} plausible ${needsReach ? "blocker(s), including flying or reach where needed" : "blocker(s)"}. Resolve exact blocks in your playtester.` };
 }
