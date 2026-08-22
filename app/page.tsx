@@ -40,7 +40,7 @@ type HistoryEntry = {
 };
 
 type GameState = {
-  version: 2;
+  version: 3;
   turn: number;
   eventCounter: number;
   defenseCounter: number;
@@ -54,6 +54,7 @@ type GameState = {
   activeThreat: Threat | null;
   recentTemplateIds: string[];
   history: HistoryEntry[];
+  answeredCount: number;
   gameOver: string | null;
 };
 
@@ -79,6 +80,8 @@ const DEFAULT_OPPONENTS: Opponent[] = [
   { id: "ari", name: "Ari", profile: "swarm", bracket: 2, life: 40, commanderDamage: {}, eliminated: false },
 ];
 
+let historyEntryCounter = 0;
+
 function cloneOpponents(opponents: Opponent[]) {
   return opponents.map((opponent) => ({ ...opponent, bracket: normalizeCommanderBracket(opponent.bracket), commanderDamage: { ...opponent.commanderDamage } }));
 }
@@ -94,7 +97,7 @@ function createInitialGame(seed = "GILDED-732", opponents = DEFAULT_OPPONENTS): 
     activeThreat: false,
   });
   return {
-    version: 2,
+    version: 3,
     turn: 1,
     eventCounter: 1,
     defenseCounter: 0,
@@ -108,12 +111,14 @@ function createInitialGame(seed = "GILDED-732", opponents = DEFAULT_OPPONENTS): 
     activeThreat: null,
     recentTemplateIds: [],
     history: [{ id: "session-start", turn: 1, title: "Session started", detail: "The simulated table is live.", tone: "neutral" }],
+    answeredCount: 0,
     gameOver: null,
   };
 }
 
 function historyEntry(state: GameState, title: string, detail: string, tone: HistoryTone): HistoryEntry {
-  return { id: `${state.turn}-${state.history.length}-${title}`, turn: state.turn, title, detail, tone };
+  historyEntryCounter += 1;
+  return { id: `${Date.now().toString(36)}-${historyEntryCounter.toString(36)}`, turn: state.turn, title, detail, tone };
 }
 
 function highestCommanderDamage(damage: Record<string, number>) {
@@ -176,6 +181,8 @@ function CardPreview({ name, lookupName = name }: { name: string; lookupName?: s
       panel.style.left = `${Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2))}px`;
       panel.style.top = `${side === "above" ? rect.top - 10 : side === "below" ? rect.bottom + 10 : 12}px`;
       panel.dataset.side = side;
+      setResult((current) => current?.name === cardName && current.image === null ? undefined : current);
+      setFailedImage((current) => current === image ? undefined : current);
       setRequestedName(cardName);
       if (!panel.matches(":popover-open")) panel.showPopover();
     }, delay);
@@ -273,6 +280,11 @@ export default function Home() {
   const responseStep = useRef<HTMLSpanElement>(null);
   const previousResponseStage = useRef(game.responseStage);
   const defenseResult = useRef<HTMLDivElement>(null);
+  const threatHeading = useRef<HTMLHeadingElement>(null);
+  const threatAnswerButton = useRef<HTMLButtonElement>(null);
+  const settingsPanel = useRef<HTMLDivElement>(null);
+  const attackerNameInput = useRef<HTMLInputElement>(null);
+  const outgoingList = useRef<HTMLDivElement>(null);
 
   const [activeModal, setActiveModal] = useState<"settings" | "library" | "combat" | "reset" | null>(null);
   const [settingsOpponents, setSettingsOpponents] = useState<Opponent[]>([]);
@@ -291,14 +303,23 @@ export default function Home() {
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved) as Omit<GameState, "version"> & { version: number };
-        if ((parsed.version === 1 || parsed.version === 2) && parsed.currentEvent && Array.isArray(parsed.opponents)) {
+        const parsed = JSON.parse(saved) as Omit<GameState, "version" | "answeredCount"> & { version: number; answeredCount?: number };
+        if ([1, 2, 3].includes(parsed.version) && parsed.currentEvent && Array.isArray(parsed.opponents)) {
+          const migratedAnsweredCount = Array.isArray(parsed.history)
+            ? parsed.history.filter((entry) => ["Action answered", "Threat answered", "Combat prevented"].includes(entry.title)).length
+            : 0;
           // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate client-only persisted state after mount
-          setGame({ ...parsed, version: 2, opponents: cloneOpponents(parsed.opponents) });
+          setGame({
+            ...parsed,
+            version: 3,
+            opponents: cloneOpponents(parsed.opponents),
+            history: Array.isArray(parsed.history) ? parsed.history : [],
+            answeredCount: Number.isFinite(parsed.answeredCount) ? Math.max(0, Math.floor(parsed.answeredCount ?? 0)) : migratedAnsweredCount,
+          });
         }
       }
     } catch {
-      window.localStorage.removeItem(STORAGE_KEY);
+      try { window.localStorage.removeItem(STORAGE_KEY); } catch { /* Storage may be unavailable. */ }
     } finally {
       setHydrated(true);
     }
@@ -306,7 +327,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!hydrated) return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(game));
+    try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(game)); } catch { /* Continue without persistence. */ }
   }, [game, hydrated]);
 
   useEffect(() => {
@@ -330,10 +351,11 @@ export default function Home() {
   const incomingLifelinkTotal = game.currentEvent.attackers?.filter((attacker) => attacker.keywords.includes("Lifelink")).reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0) ?? 0;
   const livingOpponents = game.opponents.filter((opponent) => !opponent.eliminated);
 
-  function resolveEvent(title: string, detail: string, tone: HistoryTone, patch: Partial<GameState> = {}) {
+  function resolveEvent(title: string, detail: string, tone: HistoryTone, patch: Partial<GameState> = {}, answered = false) {
     commit((previous) => ({
       ...previous,
       ...patch,
+      answeredCount: previous.answeredCount + Number(answered),
       responseStage: "resolved",
       resolution: detail,
       history: [historyEntry(previous, title, detail, tone), ...previous.history].slice(0, 40),
@@ -376,10 +398,10 @@ export default function Home() {
       redirect: "You changed the target; apply the new target in your playtester.",
       custom: "You supplied a legal answer and stopped the generated action.",
     };
-    resolveEvent("Action answered", labels[answer], "success");
+    resolveEvent("Action answered", labels[answer], "success", {}, true);
   }
 
-  function applyIncoming(regularDamage: number, commanderDamage: number, label: string, lifelinkDamage = 0) {
+  function applyIncoming(regularDamage: number, commanderDamage: number, label: string, lifelinkDamage = 0, answered = false) {
     const commanderName = game.currentEvent.attackers?.find((attacker) => attacker.isCommander)?.name ?? `${game.currentEvent.sourceName}’s commander`;
     const commanderId = opponentCommanderKey(game.currentEvent.sourceId);
     const result = applyCombatDamage({
@@ -400,6 +422,7 @@ export default function Home() {
       result.totalDamage === 0 ? "No combat damage reached you." : `${result.totalDamage} combat damage reached you${commanderDamage ? `, including ${commanderDamage} commander damage` : ""}${lifelinkGain ? `; ${game.currentEvent.sourceName} gained ${lifelinkGain} life` : ""}.`,
       result.totalDamage ? "damage" : "success",
       { userLife: result.life, userCommanderDamage: result.commanderDamage, opponents, gameOver },
+      answered,
     );
   }
 
@@ -456,6 +479,31 @@ export default function Home() {
     });
   }
 
+  function continueAfterGameOver() {
+    setGame((previous) => {
+      if (!previous.activeThreat || previous.activeThreat.remaining > 0) return { ...previous, gameOver: null };
+      const recentTemplateIds = [previous.currentEvent.templateId, ...previous.recentTemplateIds].slice(0, 3);
+      const eventCounter = previous.eventCounter + 1;
+      return {
+        ...previous,
+        gameOver: null,
+        activeThreat: null,
+        eventCounter,
+        recentTemplateIds,
+        currentEvent: generateEvent({
+          turn: previous.turn,
+          counter: eventCounter,
+          seed: previous.seed,
+          opponents: previous.opponents,
+          recentTemplateIds,
+          activeThreat: false,
+        }),
+        responseStage: "prompt",
+        resolution: "",
+      };
+    });
+  }
+
   function adjustLife(target: "user" | string, amount: number) {
     commit((previous) => {
       if (target === "user") {
@@ -491,8 +539,10 @@ export default function Home() {
     commit((previous) => ({
       ...previous,
       activeThreat: null,
+      answeredCount: previous.answeredCount + 1,
       history: [historyEntry(previous, "Threat answered", `${previous.activeThreat?.title ?? "The active threat"} is no longer threatening the table.`, "success"), ...previous.history].slice(0, 40),
     }));
+    requestAnimationFrame(() => threatHeading.current?.focus());
   }
 
   function delayThreat() {
@@ -502,6 +552,25 @@ export default function Home() {
       activeThreat: previous.activeThreat ? { ...previous.activeThreat, remaining: previous.activeThreat.remaining + 1, delayed: true } : null,
       history: [historyEntry(previous, "Threat delayed", "You bought one additional turn.", "success"), ...previous.history].slice(0, 40),
     }));
+    requestAnimationFrame(() => threatAnswerButton.current?.focus());
+  }
+
+  function removeSettingsOpponent(id: string, index: number) {
+    setSettingsOpponents((current) => current.filter((opponent) => opponent.id !== id));
+    requestAnimationFrame(() => {
+      const inputs = settingsPanel.current?.querySelectorAll<HTMLInputElement>(".opponent-setting input");
+      const nextInput = inputs?.[Math.min(index, inputs.length - 1)];
+      if (nextInput) nextInput.focus();
+      else settingsPanel.current?.querySelector<HTMLButtonElement>(".add-opponent")?.focus();
+    });
+  }
+
+  function addSettingsOpponent() {
+    setSettingsOpponents((current) => current.length >= 3 ? current : [...current, { id: `opponent-${Date.now()}`, name: `Opponent ${current.length + 1}`, profile: "midrange", bracket: 3, life: 40, commanderDamage: {}, eliminated: false }]);
+    requestAnimationFrame(() => {
+      const inputs = settingsPanel.current?.querySelectorAll<HTMLInputElement>(".opponent-setting input");
+      inputs?.[inputs.length - 1]?.focus();
+    });
   }
 
   function openSettings() {
@@ -563,7 +632,8 @@ export default function Home() {
     setActiveModal("combat");
   }
 
-  function addOutgoingAttacker() {
+  function addOutgoingAttacker(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     const attacker: OutgoingAttacker = {
       id: `attacker-${Date.now()}-${outgoingAttackers.length}`,
       name: attackerName.trim() || (attackerCommander ? "Your commander" : `Attacker ${outgoingAttackers.length + 1}`),
@@ -578,6 +648,18 @@ export default function Home() {
     setAttackerCommander(false);
     setAttackerKeywords([]);
     setDefense(null);
+    requestAnimationFrame(() => attackerNameInput.current?.focus());
+  }
+
+  function removeOutgoingAttacker(id: string, index: number) {
+    setOutgoingAttackers((current) => current.filter((attacker) => attacker.id !== id));
+    setDefense(null);
+    requestAnimationFrame(() => {
+      const buttons = outgoingList.current?.querySelectorAll<HTMLButtonElement>("article > button");
+      const nextButton = buttons?.[Math.min(index, buttons.length - 1)];
+      if (nextButton) nextButton.focus();
+      else attackerNameInput.current?.focus();
+    });
   }
 
   function fullCombatDamage(attackers: OutgoingAttacker[], ignoredId?: string) {
@@ -606,7 +688,9 @@ export default function Home() {
   }
 
   function answerDefense() {
+    if (!defense || defense.type === "none") return;
     setDefense({ type: "none", title: "Defense answered", detail: "Your interaction stops the defensive play. Resolve combat normally." });
+    setGame((previous) => ({ ...previous, answeredCount: previous.answeredCount + 1 }));
   }
 
   function applyOutgoingDamage(event: React.FormEvent<HTMLFormElement>) {
@@ -671,16 +755,14 @@ export default function Home() {
   const opponentCommanderLabels = Object.fromEntries(game.opponents.map((opponent) => [opponentCommanderKey(opponent.id), `${opponent.name}’s commander`]));
   const removedAttackerId = defense?.type === "removal" ? [...outgoingAttackers].sort((a, b) => b.power - a.power)[0]?.id : undefined;
   const outgoingDamageLimit = defense?.type === "fog" ? { regular: 0, commander: {} as Record<string, number>, lifelink: 0 } : fullCombatDamage(outgoingAttackers, removedAttackerId);
-  const liveMessage = game.gameOver
-    ?? (activeModal === "combat" && defense ? `Defense roll: ${defense.title}. ${defense.detail}` : null)
+  const liveMessage = (activeModal === "combat" && defense ? `Defense roll: ${defense.title}. ${defense.detail}` : null)
     ?? (game.responseStage === "counterback" ? "Your counter was countered. Choose whether to answer again or let the original action resolve." : null)
     ?? (game.responseStage === "choose" ? "Response choices are ready: counter, protect, redirect, or use another answer." : null)
     ?? (game.responseStage === "combat" ? "Combat damage fields are ready. Enter the regular and commander damage that reached you." : null)
     ?? (game.responseStage !== "resolved" ? `${EVENT_PRESENTATION[game.currentEvent.kind].label}: ${game.currentEvent.title}` : game.resolution);
   return (
     <main className="app-shell">
-      <div className="sr-only" aria-live="polite" aria-atomic="true">{liveMessage}</div>
-      {game.gameOver && <div className="sr-only" role="alert">{game.gameOver}</div>}
+      <div className="sr-only" aria-live="polite" aria-atomic="true">{game.gameOver ? "" : liveMessage}</div>
 
       <header className="topbar">
         <a className="brand" href="#main-workspace" aria-label="Goldfish Lab home">
@@ -694,37 +776,6 @@ export default function Home() {
       </header>
 
       <section className="workspace" id="main-workspace">
-        <aside className="rail opponents-panel" aria-labelledby="opponents-title">
-          <div className="section-heading">
-            <div><span className="eyebrow">The table</span><h2 id="opponents-title">Opponents</h2></div>
-            <button className="icon-button" type="button" onClick={openSettings} aria-label="Edit opponents">+</button>
-          </div>
-          <div className="opponent-list">
-            {game.opponents.map((opponent, index) => (
-              <article className={`opponent ${opponent.eliminated ? "eliminated" : ""}`} key={opponent.id}>
-                <span className={`avatar avatar-${index + 1}`}>{opponent.name.slice(0, 1).toUpperCase()}</span>
-            <div className="opponent-copy"><strong>{opponent.name}</strong><small>{opponent.eliminated ? "Eliminated" : `${PROFILE_LABELS[opponent.profile]} · ${bracketLabel(opponent.bracket)}`}</small><CommanderLedger damage={opponent.commanderDamage} labels={USER_COMMANDER_LABELS} /></div>
-                <div className="life-control">
-                  <button type="button" onClick={() => adjustLife(opponent.id, -1)} aria-label={`Remove one life from ${opponent.name}`}>−</button>
-                  <span className="life" aria-live="polite"><b>{opponent.life}</b><small>life</small></span>
-                  <button type="button" onClick={() => adjustLife(opponent.id, 1)} aria-label={`Add one life to ${opponent.name}`}>+</button>
-                </div>
-              </article>
-            ))}
-          </div>
-          <article className="you-card">
-            <span className="avatar avatar-you">You</span>
-            <div className="opponent-copy"><strong>Your board</strong><small>Highest commander damage: {maxUserCommanderDamage}</small><CommanderLedger damage={game.userCommanderDamage} labels={opponentCommanderLabels} dark /></div>
-            <div className="life-control life-control-dark">
-              <button type="button" onClick={() => adjustLife("user", -1)} aria-label="Remove one life from you">−</button>
-              <span className="life" aria-live="polite"><b>{game.userLife}</b><small>life</small></span>
-              <button type="button" onClick={() => adjustLife("user", 1)} aria-label="Add one life to you">+</button>
-            </div>
-          </article>
-          <button className="secondary-wide" type="button" onClick={openCombat} disabled={!livingOpponents.length}>Assign your combat damage <span>→</span></button>
-          <p className="rail-note">Tap attackers in your playtester, then let this table roll a defense.</p>
-        </aside>
-
         <section className="encounter-column" aria-labelledby="encounter-title">
           <div className="encounter-intro">
             <div><span className="eyebrow">{game.responseStage !== "resolved" ? "Priority check" : "Outcome recorded"}</span><h1 id="encounter-title">{game.responseStage !== "resolved" ? "The table acts." : "Action resolved."}</h1></div>
@@ -809,7 +860,7 @@ export default function Home() {
                   <div className="response-actions combat-actions">
                     <button className="primary-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "combat" }))}>Block / interact <span>→</span></button>
                     <button className="secondary-button" type="button" onClick={() => applyIncoming(incomingRegularTotal, incomingCommanderTotal, "Attack connected", incomingLifelinkTotal)}>Take the hit</button>
-                    <button className="text-button" type="button" onClick={() => applyIncoming(0, 0, "Combat prevented")}>Fog / stop combat</button>
+                    <button className="text-button" type="button" onClick={() => applyIncoming(0, 0, "Combat prevented", 0, true)}>Fog / stop combat</button>
                   </div>
                 </div>
               )}
@@ -845,10 +896,41 @@ export default function Home() {
           </div>
         </section>
 
+        <aside className="rail opponents-panel" aria-labelledby="opponents-title">
+          <div className="section-heading">
+            <div><span className="eyebrow">The table</span><h2 id="opponents-title">Opponents</h2></div>
+            <button className="icon-button" type="button" onClick={openSettings} aria-label="Edit opponents">+</button>
+          </div>
+          <div className="opponent-list">
+            {game.opponents.map((opponent, index) => (
+              <article className={`opponent ${opponent.eliminated ? "eliminated" : ""}`} key={opponent.id}>
+                <span className={`avatar avatar-${index + 1}`}>{opponent.name.slice(0, 1).toUpperCase()}</span>
+                <div className="opponent-copy"><strong>{opponent.name}</strong><small>{opponent.eliminated ? "Eliminated" : `${PROFILE_LABELS[opponent.profile]} · ${bracketLabel(opponent.bracket)}`}</small><CommanderLedger damage={opponent.commanderDamage} labels={USER_COMMANDER_LABELS} /></div>
+                <div className="life-control">
+                  <button type="button" onClick={() => adjustLife(opponent.id, -1)} aria-label={`Remove one life from ${opponent.name}`}>−</button>
+                  <span className="life" aria-live="polite"><b>{opponent.life}</b><small>life</small></span>
+                  <button type="button" onClick={() => adjustLife(opponent.id, 1)} aria-label={`Add one life to ${opponent.name}`}>+</button>
+                </div>
+              </article>
+            ))}
+          </div>
+          <article className="you-card">
+            <span className="avatar avatar-you">You</span>
+            <div className="opponent-copy"><strong>Your board</strong><small>Highest commander damage: {maxUserCommanderDamage}</small><CommanderLedger damage={game.userCommanderDamage} labels={opponentCommanderLabels} dark /></div>
+            <div className="life-control life-control-dark">
+              <button type="button" onClick={() => adjustLife("user", -1)} aria-label="Remove one life from you">−</button>
+              <span className="life" aria-live="polite"><b>{game.userLife}</b><small>life</small></span>
+              <button type="button" onClick={() => adjustLife("user", 1)} aria-label="Add one life to you">+</button>
+            </div>
+          </article>
+          <button className="secondary-wide" type="button" onClick={openCombat} disabled={!livingOpponents.length}>Assign your combat damage <span>→</span></button>
+          <p className="rail-note">Tap attackers in your playtester, then let this table roll a defense.</p>
+        </aside>
+
         <aside className="rail pressure-panel" aria-label="Table pressure">
           <section aria-labelledby="threat-title" aria-live="polite">
             <div className="section-heading">
-              <div><span className="eyebrow">Clock is ticking</span><h2 id="threat-title">Active threat</h2></div>
+              <div><span className="eyebrow">Clock is ticking</span><h2 id="threat-title" ref={threatHeading} tabIndex={-1}>Active threat</h2></div>
               {game.activeThreat && <span className={`countdown ${game.activeThreat.remaining <= 1 ? "imminent" : ""}`}>{game.activeThreat.remaining} {game.activeThreat.remaining === 1 ? "turn" : "turns"}</span>}
             </div>
             {game.activeThreat ? (
@@ -856,7 +938,7 @@ export default function Home() {
                 <span className="threat-icon" aria-hidden="true">!</span>
                 <div><strong>{game.activeThreat.title}</strong><p>{game.activeThreat.description}</p></div>
                 <div className="threat-actions">
-                  <button className="text-button light" type="button" onClick={stopThreat}>I answered this threat</button>
+                  <button className="text-button light" type="button" onClick={stopThreat} ref={threatAnswerButton}>I answered this threat</button>
                   <button className="text-button light" type="button" onClick={delayThreat} disabled={game.activeThreat.delayed}>{game.activeThreat.delayed ? "Already delayed" : "Delay +1 turn"}</button>
                 </div>
               </article>
@@ -879,14 +961,14 @@ export default function Home() {
       <footer className="session-footer">
         <span>Session seed <b>{game.seed}</b></span>
         <button type="button" onClick={() => setActiveModal("library")}>Scenario library · {CARD_LIBRARY_UPDATED}</button>
-        <span>{hydrated ? "Draft saved on this device" : "Loading session…"}</span>
+        <span>{hydrated ? "Autosaves locally when available" : "Loading session…"}</span>
         <button type="button" onClick={() => setActiveModal("reset")}>Restart session</button>
       </footer>
 
       {activeModal === "settings" && (
         <Modal title="Set up the table" subtitle="Choose one to three matchup profiles. Each deck package shapes the action mix; its bracket sets pacing and interaction frequency." onClose={() => setActiveModal(null)} wide>
           <div className="settings-body">
-            <div className="opponent-settings">
+            <div className="opponent-settings" ref={settingsPanel}>
               {settingsOpponents.map((opponent, index) => {
                 const profile = DECK_PROFILES[opponent.profile];
                 const bracket = normalizeCommanderBracket(opponent.bracket);
@@ -900,13 +982,13 @@ export default function Home() {
                     <label>Name<input value={opponent.name} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, name: event.target.value } : item))} /></label>
                     <label>Deck profile<select value={opponent.profile} aria-describedby={profileDescriptionId} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, profile: event.target.value as ProfileId } : item))}>{Object.entries(PROFILE_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
                     <label>Commander bracket<select value={bracket} aria-describedby={bracketDescriptionId} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, bracket: Number(event.target.value) as CommanderBracket } : item))}>{Object.entries(COMMANDER_BRACKETS).map(([value, rules]) => <option value={value} key={value}>B{value} {rules.label}</option>)}</select></label>
-                    <button className="remove-button" type="button" onClick={() => setSettingsOpponents((current) => current.filter((item) => item.id !== opponent.id))} disabled={settingsOpponents.length === 1} aria-label={`Remove ${opponent.name}`}>Remove</button>
+                    <button className="remove-button" type="button" onClick={() => removeSettingsOpponent(opponent.id, index)} disabled={settingsOpponents.length === 1} aria-label={`Remove ${opponent.name}`}>Remove</button>
                     <div className="profile-setting-copy" id={profileDescriptionId}><p>{profile.description}</p><p><strong>Included cards:</strong> {profile.guaranteedCards.map((card, cardIndex) => <span key={card.name}>{cardIndex > 0 && " · "}<CardPreview name={card.name} /></span>)} <span>(in the simulated deck; not guaranteed drawn)</span></p></div>
                     <p className="bracket-setting-copy" id={bracketDescriptionId}><strong>{bracketLabel(bracket)}:</strong> {bracketRules.summary} {bracketRules.turnGuide}</p>
                   </fieldset>
                 );
               })}
-              <button className="add-opponent" type="button" onClick={() => setSettingsOpponents((current) => [...current, { id: `opponent-${Date.now()}`, name: `Opponent ${current.length + 1}`, profile: "midrange", bracket: 3, life: 40, commanderDamage: {}, eliminated: false }])} disabled={settingsOpponents.length >= 3}>+ Add opponent</button>
+              <button className="add-opponent" type="button" onClick={addSettingsOpponent} disabled={settingsOpponents.length >= 3}>+ Add opponent</button>
             </div>
             <div className="session-settings">
               <label>Session seed<input value={settingsSeed} onChange={(event) => setSettingsSeed(event.target.value.toUpperCase())} maxLength={24} /></label>
@@ -923,22 +1005,22 @@ export default function Home() {
         <Modal title="Assign your attack" subtitle="Add the creatures you tapped in your playtester, roll one table defense, then confirm damage." onClose={() => setActiveModal(null)} wide>
           <div className="combat-builder">
             <label className="target-select">Attack target<select value={combatTarget} onChange={(event) => { setCombatTarget(event.target.value); setDefense(null); }}>{livingOpponents.map((opponent) => <option value={opponent.id} key={opponent.id}>{opponent.name} · {PROFILE_LABELS[opponent.profile]} · {bracketLabel(opponent.bracket)} · {opponent.life} life</option>)}</select></label>
-            <div className="attacker-form">
-              <label>Attacker name<input placeholder="e.g. Atraxa" value={attackerName} onChange={(event) => setAttackerName(event.target.value)} /></label>
+            <form className="attacker-form" onSubmit={addOutgoingAttacker}>
+              <label>Attacker name<input ref={attackerNameInput} placeholder="e.g. Atraxa" value={attackerName} onChange={(event) => setAttackerName(event.target.value)} /></label>
               <label>Power<input type="number" min="0" value={attackerPower} onChange={(event) => setAttackerPower(Math.max(0, Number(event.target.value)))} /></label>
               <label className="check-label"><input type="checkbox" checked={attackerCommander} onChange={(event) => setAttackerCommander(event.target.checked)} />Commander</label>
               {attackerCommander && <label>Commander identity<select value={attackerCommanderSlot} onChange={(event) => setAttackerCommanderSlot(event.target.value as CommanderSlot)}><option value="primary">Primary commander</option><option value="partner">Partner commander</option></select></label>}
-              <div className="keyword-picker" aria-label="Attacker keywords">{COMBAT_KEYWORDS.map((keyword) => <label key={keyword}><input type="checkbox" checked={attackerKeywords.includes(keyword)} onChange={() => setAttackerKeywords((current) => current.includes(keyword) ? current.filter((item) => item !== keyword) : [...current, keyword])} />{keyword}</label>)}</div>
-              <button className="secondary-button add-attacker-button" type="button" onClick={addOutgoingAttacker}>Add attacker</button>
-            </div>
+              <fieldset className="keyword-picker event-fieldset"><legend className="sr-only">Attacker keywords</legend>{COMBAT_KEYWORDS.map((keyword) => <label key={keyword}><input type="checkbox" checked={attackerKeywords.includes(keyword)} onChange={() => setAttackerKeywords((current) => current.includes(keyword) ? current.filter((item) => item !== keyword) : [...current, keyword])} />{keyword}</label>)}</fieldset>
+              <button className="secondary-button add-attacker-button" type="submit">Add attacker</button>
+            </form>
 
-            <div className="outgoing-list">
-              {outgoingAttackers.length ? outgoingAttackers.map((attacker) => (
-                <article key={attacker.id}><div><strong>{attacker.name}</strong><small>{attacker.isCommander ? "Commander" : "Creature"}</small></div><b>{attacker.power} power</b><div className="keyword-row">{attacker.keywords.map((keyword) => <KeywordChip keyword={keyword} key={keyword} />)}</div><button type="button" onClick={() => { setOutgoingAttackers((current) => current.filter((item) => item.id !== attacker.id)); setDefense(null); }} aria-label={`Remove ${attacker.name}`}>×</button></article>
+            <div className="outgoing-list" ref={outgoingList}>
+              {outgoingAttackers.length ? outgoingAttackers.map((attacker, index) => (
+                <article key={attacker.id}><div><strong>{attacker.name}</strong><small>{attacker.isCommander ? "Commander" : "Creature"}</small></div><b>{attacker.power} power</b><div className="keyword-row">{attacker.keywords.map((keyword) => <KeywordChip keyword={keyword} key={keyword} />)}</div><button type="button" onClick={() => removeOutgoingAttacker(attacker.id, index)} aria-label={`Remove ${attacker.name}`}>×</button></article>
               )) : <div className="empty-attackers">No attackers added yet.</div>}
             </div>
 
-            <button className="roll-button" type="button" onClick={simulateDefense} disabled={!outgoingAttackers.length || !combatTarget}>Roll defending player’s response <span>↻</span></button>
+            <button className="roll-button" type="button" onClick={simulateDefense} disabled={!outgoingAttackers.length || !combatTarget}>{defense ? "Reroll and replace current defense" : "Roll defending player’s response"} <span>↻</span></button>
 
             {defense && (
               <div className={`defense-result defense-${defense.type}`} role="status" ref={defenseResult} tabIndex={-1}>
@@ -977,9 +1059,9 @@ export default function Home() {
       )}
 
       {game.gameOver && (
-        <Modal title="The goldfish game ended" subtitle={game.gameOver} dismissible={!tableDefeated && !userDefeated} onClose={() => setGame((previous) => ({ ...previous, gameOver: null, activeThreat: previous.activeThreat && previous.activeThreat.remaining <= 0 ? null : previous.activeThreat }))}>
-          <div className="session-summary"><span><b>{game.turn}</b> turns reached</span><span><b>{game.history.filter((entry) => entry.title.includes("answered")).length}</b> threats/actions answered</span><span><b>{game.userLife}</b> life remaining</span></div>
-          <div className="modal-actions">{!tableDefeated && !userDefeated && <button className="secondary-button" type="button" onClick={() => setGame((previous) => ({ ...previous, gameOver: null, activeThreat: previous.activeThreat && previous.activeThreat.remaining <= 0 ? null : previous.activeThreat }))}>Continue anyway</button>}<button className="primary-button" type="button" onClick={resetSession}>Start a new run <span>→</span></button></div>
+        <Modal title="The goldfish game ended" subtitle={game.gameOver} dismissible={!tableDefeated && !userDefeated} onClose={continueAfterGameOver}>
+          <div className="session-summary"><span><b>{game.turn}</b> turns reached</span><span><b>{game.answeredCount}</b> threats/actions answered</span><span><b>{game.userLife}</b> life remaining</span></div>
+          <div className="modal-actions">{canUndo && <button className="secondary-button" type="button" onClick={undo}>Undo last change</button>}{!tableDefeated && !userDefeated && <button className="secondary-button" type="button" onClick={continueAfterGameOver}>Continue anyway</button>}<button className="primary-button" type="button" onClick={resetSession}>Start a new run <span>→</span></button></div>
         </Modal>
       )}
     </main>

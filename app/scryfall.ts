@@ -22,10 +22,12 @@ export function scryfallImageUrl(data: unknown) {
 export function loadCardImage(name: string) {
   const key = normalizeCardName(name).toLowerCase();
   if (!imageCache.has(key)) {
-    imageCache.set(key, fetch(scryfallCardUrl(name), { headers: { Accept: "application/json" } })
+    const request = fetch(scryfallCardUrl(name), { headers: { Accept: "application/json" } })
       .then((response) => response.ok ? response.json() : null)
       .then(scryfallImageUrl)
-      .catch(() => null));
+      .catch(() => null);
+    imageCache.set(key, request);
+    void request.then((image) => { if (!image && imageCache.get(key) === request) imageCache.delete(key); });
   }
   return imageCache.get(key)!;
 }
