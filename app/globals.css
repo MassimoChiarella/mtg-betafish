@@ -385,7 +385,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .advance-button { width: 100%; }
 }
 
-/* A carved storybook game box: walnut shell, brass trim, parchment trays. */
+/* Final visual-theme override layer; these rules intentionally win over the base styles. */
 .topbar {
   border-bottom: 2px solid #9b742e;
   background:

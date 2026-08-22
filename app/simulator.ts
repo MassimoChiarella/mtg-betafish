@@ -1,3 +1,8 @@
+/**
+ * Seeded Commander-table heuristics. Random outcomes must remain reproducible
+ * for the same seed, turn, and action counter so saved sessions can be replayed.
+ */
+
 export type ProfileId = "midrange" | "control" | "swarm" | "voltron" | "combo" | "graveyard";
 export type EventKind = "targeted" | "wipe" | "counter" | "disruption" | "attack" | "threat" | "development";
 export type Keyword = "Flying" | "Reach" | "Trample" | "Menace" | "Vigilance" | "Deathtouch" | "First strike" | "Double strike" | "Haste" | "Lifelink";
@@ -64,6 +69,7 @@ type EventTemplate = {
   prompt: string;
   card: string;
   tags: string[];
+  /** Withheld from Brackets 1–2. */
   gameChanger?: boolean;
 };
 
@@ -132,7 +138,9 @@ export const DECK_PROFILES: Record<ProfileId, {
   guaranteedCards: readonly ProfileCard[];
   combat: number;
   counterBack: number;
+  /** Relative event-selection weights. */
   events: Record<Exclude<EventKind, "attack" | "development">, number>;
+  /** Base defense weights ordered as none, block, removal, and fog. */
   defense: [number, number, number, number];
 }> = {
   midrange: { label: "Generic midrange", description: "Flexible value creatures, broad removal, and resilient combat pressure.", guaranteedCards: [{ name: "Beast Within", templateId: "destroy-creature" }, { name: "Wrath of God", templateId: "destroy-wipe" }, { name: "Disrupt Decorum", templateId: "goad" }], combat: 1, counterBack: .12, events: { targeted: 32, wipe: 18, counter: 10, disruption: 25, threat: 15 }, defense: [30, 42, 20, 8] },
@@ -177,6 +185,8 @@ export const EVENT_TEMPLATES: EventTemplate[] = [
   { id: "combat-clock", kind: "threat", minTurn: 1, title: "A lethal combat turn is coming.", prompt: "The creature deck is building a lethal overrun. Remove the enabler or hold up a fog before the countdown expires.", card: "Craterhoof Behemoth", tags: ["Game-ending", "Combat"] },
 ];
 
+// FNV-1a and Mulberry32 provide deterministic, non-cryptographic replay randomness.
+// Keep both algorithms stable: existing session seeds depend on their exact output.
 function hashSeed(value: string) {
   let hash = 2166136261;
   for (let index = 0; index < value.length; index += 1) {
@@ -227,12 +237,14 @@ function attackBand(turn: number) {
   return { chance: .9, count: [4, 8], power: [22, Math.min(60, 40 + (turn - 10) * 3)], keyword: .7 };
 }
 
+/** Returns app-tuned relative weights, not probabilities; weighted selection normalizes them. */
 export function eventKindWeights(input: { turn: number; profile: ProfileId; bracket: CommanderBracket; activeThreat: boolean }): Record<EventKind, number> {
   const bracket = normalizeCommanderBracket(input.bracket);
   const bracketRules = COMMANDER_BRACKETS[bracket];
   const profile = DECK_PROFILES[input.profile];
   const effectiveTurn = Math.max(1, input.turn + bracketRules.turnOffset);
   const eligibleKinds = new Set(EVENT_TEMPLATES.filter((template) => template.minTurn <= effectiveTurn && (bracket >= 3 || !template.gameChanger)).map((template) => template.kind));
+  // Exponents and the attack factor are tuning constants, not official Magic rules.
   const interactionScale = bracketRules.interaction ** 4;
   return {
     targeted: eligibleKinds.has("targeted") ? profile.events.targeted * interactionScale : 0,
@@ -287,10 +299,17 @@ function generateAttack(random: () => number, turn: number, source: Opponent, pa
   });
 }
 
+/** Raw unblocked damage; models double strike but not blocks or prevention. */
 export const incomingDamage = (attackers: Attacker[]) => attackers.reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0);
 
+/** Commander-only portion of raw unblocked damage. */
 export const incomingCommanderDamage = (attackers: Attacker[]) => attackers.filter((attacker) => attacker.isCommander).reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0);
 
+/**
+ * Generates the same event for identical inputs and avoids recent templates
+ * when an eligible alternative exists.
+ * @throws When every opponent has been eliminated.
+ */
 export function generateEvent(input: {
   turn: number;
   counter: number;
@@ -371,11 +390,13 @@ export function generateEvent(input: {
   };
 }
 
+/** Rolls a deterministic response to the user's counterspell. */
 export function counterBacks(input: { profile: ProfileId; bracket: CommanderBracket; seed: string; turn: number; counter: number }) {
   const interaction = COMMANDER_BRACKETS[normalizeCommanderBracket(input.bracket)].interaction;
   return rngFor(`${input.seed}:counter:${input.turn}:${input.counter}`)() < Math.min(.8, DECK_PROFILES[input.profile].counterBack * interaction);
 }
 
+/** Rolls one deterministic defense while leaving exact combat resolution to the playtester. */
 export function rollDefense(input: {
   profile: ProfileId;
   bracket: CommanderBracket;
@@ -402,6 +423,10 @@ export function rollDefense(input: {
   return { type, title: `${blockerCount} ${blockerCount === 1 ? "blocker" : "blockers"}`, detail: `The opponent commits ${blockerCount} plausible ${needsReach ? "blocker(s), including flying or reach where needed" : "blocker(s)"}. Resolve exact blocks in your playtester.` };
 }
 
+/**
+ * Applies regular and per-commander damage, including the format's 21-damage
+ * loss rule. `regularDamage` must exclude damage already in `commanderHits`.
+ */
 export function applyCombatDamage(input: {
   life: number;
   commanderDamage: Record<string, number>;

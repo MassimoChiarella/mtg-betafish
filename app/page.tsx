@@ -161,6 +161,7 @@ const GLOSSARY_MATCHES = {
 } as Record<string, GlossaryKey>;
 const GLOSSARY_PATTERN = new RegExp(`\\b(${Object.keys(GLOSSARY_MATCHES).sort((a, b) => b.length - a.length).join("|")})\\b`, "gi");
 
+/** Positions a hover/focus preview inside the viewport and coordinates delayed dismissal. */
 function useHoverPreview<T extends HTMLElement>(width: number, height: number, onShow?: () => void) {
   const previewId = useId();
   const trigger = useRef<T>(null);
@@ -252,7 +253,7 @@ function CardPreview({ name, lookupName = name }: { name: string; lookupName?: s
       <span className="preview-panel card-preview-panel" id={previewId} role="tooltip" ref={preview} popover="auto" onPointerEnter={keepPreviewOpen} onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== trigger.current) closePreview(160); }}>
         {(image === undefined || (image && loadedImage !== image && failedImage !== image)) && <span className="card-preview-status" role="status">Loading card image…</span>}
         {(image === null || failedImage === image) && <span className="card-preview-status" role="status">Card image unavailable.</span>}
-        {/* eslint-disable-next-line @next/next/no-img-element -- Scryfall provides runtime image URLs */}
+        {/* eslint-disable-next-line @next/next/no-img-element -- render trusted Scryfall CDN art without proxying third-party images */}
         {image && failedImage !== image && <img className={loadedImage === image ? "" : "pending"} src={image} alt={`${cardName} card`} decoding="async" onLoad={() => setLoadedImage(image)} onError={() => setFailedImage(image)} />}
       </span>
     </span>
@@ -407,6 +408,7 @@ export default function Home() {
   const [attackerKeywords, setAttackerKeywords] = useState<Keyword[]>([]);
   const [defense, setDefense] = useState<DefenseResult | null>(null);
 
+  // Persistence is best-effort: private browsing and storage policies may disable it.
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
@@ -438,6 +440,7 @@ export default function Home() {
     try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(game)); } catch { /* Continue without persistence. */ }
   }, [game, hydrated]);
 
+  // Move focus only when the encounter or response step changes.
   useEffect(() => {
     const eventKey = `${game.seed}:${game.eventCounter}`;
     if (previousEventKey.current !== eventKey) encounterHeading.current?.focus();
@@ -450,6 +453,7 @@ export default function Home() {
     if (activeModal === "combat" && defense) defenseResult.current?.focus();
   }, [activeModal, defense]);
 
+  // Keep ten reversible game states in memory; local storage only persists the current state.
   function commit(update: (previous: GameState) => GameState) {
     undoStack.current = [...undoStack.current.slice(-9), game];
     setGame(update(game));
@@ -861,7 +865,7 @@ export default function Home() {
   const eventCardLookup = game.currentEvent.kind === "attack" || game.currentEvent.kind === "development" || game.currentEvent.templateId === "random-discard"
     ? null
     : game.currentEvent.templateId === "combo-clock" ? "Thassa’s Oracle" : game.currentEvent.card;
-  // eslint-disable-next-line react-hooks/refs -- every stack mutation also updates game state
+  // eslint-disable-next-line react-hooks/refs -- commit, undo, and reset pair each stack mutation with a game-state render
   const canUndo = undoStack.current.length > 0;
   const opponentCommanderLabels = Object.fromEntries(game.opponents.map((opponent) => [opponentCommanderKey(opponent.id), `${opponent.name}’s commander`]));
   const removedAttackerId = defense?.type === "removal" ? [...outgoingAttackers].sort((a, b) => b.power - a.power)[0]?.id : undefined;
