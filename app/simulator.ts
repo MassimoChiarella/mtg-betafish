@@ -239,7 +239,7 @@ function attackBand(turn: number) {
 }
 
 /** Returns app-tuned relative weights, not probabilities; weighted selection normalizes them. */
-export function eventKindWeights(input: { turn: number; profile: ProfileId; bracket: CommanderBracket; activeThreat: boolean }): Record<EventKind, number> {
+export function eventKindWeights(input: { turn: number; profile: ProfileId; bracket: CommanderBracket; activeThreat: boolean; combatResolvedTurn?: number | null }): Record<EventKind, number> {
   const bracket = normalizeCommanderBracket(input.bracket);
   const bracketRules = COMMANDER_BRACKETS[bracket];
   const profile = DECK_PROFILES[input.profile];
@@ -252,7 +252,7 @@ export function eventKindWeights(input: { turn: number; profile: ProfileId; brac
     wipe: eligibleKinds.has("wipe") ? profile.events.wipe * interactionScale : 0,
     counter: eligibleKinds.has("counter") ? profile.events.counter * interactionScale : 0,
     disruption: eligibleKinds.has("disruption") ? profile.events.disruption * bracketRules.pace : 0,
-    attack: attackBand(effectiveTurn).chance * profile.combat * (bracketRules.pace ** 3) * 35,
+    attack: input.combatResolvedTurn === input.turn ? 0 : attackBand(effectiveTurn).chance * profile.combat * (bracketRules.pace ** 3) * 35,
     threat: !input.activeThreat && input.turn >= bracketRules.earliestThreatTurn && eligibleKinds.has("threat") ? profile.events.threat * bracketRules.pace : 0,
     development: ({ 1: 70, 2: 55, 3: 40, 4: 25, 5: 10 } as Record<CommanderBracket, number>)[bracket],
   };
@@ -318,8 +318,9 @@ export function generateEvent(input: {
   opponents: Opponent[];
   recentTemplateIds: string[];
   activeThreat: boolean;
+  combatResolvedTurn?: number | null;
 }): SimEvent {
-  const { turn, counter, seed, recentTemplateIds, activeThreat } = input;
+  const { turn, counter, seed, recentTemplateIds, activeThreat, combatResolvedTurn } = input;
   const livingOpponents = input.opponents.filter((opponent) => !opponent.eliminated);
   if (!livingOpponents.length) throw new Error("Cannot generate an event without a living opponent.");
   const random = rngFor(`${seed}:${turn}:${counter}`);
@@ -331,7 +332,7 @@ export function generateEvent(input: {
   const eventId = `event-${turn}-${counter}`;
 
   const isEligible = (template: EventTemplate) => template.minTurn <= effectiveTurn && (bracket >= 3 || !template.gameChanger);
-  const eventWeights = eventKindWeights({ turn, profile: source.profile, bracket, activeThreat });
+  const eventWeights = eventKindWeights({ turn, profile: source.profile, bracket, activeThreat, combatResolvedTurn });
   const kind = weightedPick(random, eventWeights);
 
   if (kind === "attack") {
@@ -345,7 +346,7 @@ export function generateEvent(input: {
       title: `${source.name} declares ${attackers.length === 1 ? "one attacker" : `all ${attackers.length} attackers`} at you.`,
       prompt: "These are all attackers declared at you for this combat. Resolve blocks and interaction once, then record the total damage that gets through.",
       card: `${PROFILE_LABELS[source.profile]} combat`,
-      tags: ["Combat", "One combat declaration", `B${bracket} ${bracketRules.label}`, `Turn ${turn} scaling`],
+      tags: ["Combat", "Only combat this turn", `B${bracket} ${bracketRules.label}`, `Turn ${turn} scaling`],
       attackers,
     };
   }
@@ -358,7 +359,7 @@ export function generateEvent(input: {
       sourceId: source.id,
       sourceName: source.name,
       title: `${source.name} develops their game plan.`,
-      prompt: "No spell or attacker is aimed at you this turn. Use the breathing room to advance your own plan.",
+      prompt: "No spell or attacker is aimed at you by this action. Use the breathing room to advance your own plan.",
       card: `${PROFILE_LABELS[source.profile]} setup`,
       tags: ["Development", `B${bracket} ${bracketRules.label}`],
     };

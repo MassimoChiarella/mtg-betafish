@@ -51,7 +51,35 @@ test("a generated attack declares one atomic attacker batch", () => {
   assert.deepEqual(new Set(attackers.map(({ id }) => id.replace(/-attacker-\d+$/, ""))), new Set([event.id]));
   assert.equal(event.title, `One declares all ${attackers.length} attackers at you.`);
   assert.match(event.prompt, /all attackers.*once/i);
-  assert.ok(event.tags.includes("One combat declaration"));
+  assert.ok(event.tags.includes("Only combat this turn"));
+});
+
+test("resolved combat suppresses only attack weight for that turn", () => {
+  const base = { turn: 10, profile: "swarm", bracket: 5, activeThreat: false };
+  const open = eventKindWeights({ ...base, combatResolvedTurn: null });
+  const locked = eventKindWeights({ ...base, combatResolvedTurn: 10 });
+  const nextTurn = eventKindWeights({ ...base, turn: 11, combatResolvedTurn: 10 });
+
+  assert.ok(open.attack > 0);
+  assert.equal(locked.attack, 0);
+  assert.ok(nextTurn.attack > 0);
+  for (const kind of ["targeted", "wipe", "counter", "disruption", "threat", "development"]) {
+    assert.equal(locked[kind], open[kind]);
+  }
+});
+
+test("event generation honors the same-turn combat lock", () => {
+  const input = {
+    turn: 10,
+    counter: 1,
+    seed: "ATOMIC-0",
+    opponents: [{ id: "one", name: "One", profile: "swarm", bracket: 5, life: 40, commanderDamage: {}, eliminated: false }],
+    recentTemplateIds: [],
+    activeThreat: false,
+  };
+
+  assert.equal(generateEvent({ ...input, combatResolvedTurn: null }).kind, "attack");
+  assert.notEqual(generateEvent({ ...input, combatResolvedTurn: 10 }).kind, "attack");
 });
 
 test("deck profiles expose valid, bracket-safe included cards", () => {

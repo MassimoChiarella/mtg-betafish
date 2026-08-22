@@ -41,7 +41,7 @@ type HistoryEntry = {
 };
 
 type GameState = {
-  version: 3;
+  version: 4;
   turn: number;
   eventCounter: number;
   defenseCounter: number;
@@ -56,6 +56,7 @@ type GameState = {
   recentTemplateIds: string[];
   history: HistoryEntry[];
   answeredCount: number;
+  combatResolvedTurn: number | null;
   gameOver: string | null;
 };
 
@@ -97,9 +98,10 @@ function createInitialGame(seed = "GILDED-732", opponents = DEFAULT_OPPONENTS): 
     opponents: safeOpponents,
     recentTemplateIds: [],
     activeThreat: false,
+    combatResolvedTurn: null,
   });
   return {
-    version: 3,
+    version: 4,
     turn: 1,
     eventCounter: 1,
     defenseCounter: 0,
@@ -114,6 +116,7 @@ function createInitialGame(seed = "GILDED-732", opponents = DEFAULT_OPPONENTS): 
     recentTemplateIds: [],
     history: [{ id: "session-start", turn: 1, title: "Session started", detail: "The simulated table is live.", tone: "neutral" }],
     answeredCount: 0,
+    combatResolvedTurn: null,
     gameOver: null,
   };
 }
@@ -414,18 +417,26 @@ export default function Home() {
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved) as Omit<GameState, "version" | "answeredCount"> & { version: number; answeredCount?: number };
-        if ([1, 2, 3].includes(parsed.version) && parsed.currentEvent && Array.isArray(parsed.opponents)) {
-          const migratedAnsweredCount = Array.isArray(parsed.history)
-            ? parsed.history.filter((entry) => ["Action answered", "Threat answered", "Combat prevented"].includes(entry.title)).length
-            : 0;
+        const parsed = JSON.parse(saved) as Omit<GameState, "version" | "answeredCount" | "combatResolvedTurn"> & { version: number; answeredCount?: number; combatResolvedTurn?: number | null };
+        if ([1, 2, 3, 4].includes(parsed.version) && parsed.currentEvent && Array.isArray(parsed.opponents)) {
+          const history = Array.isArray(parsed.history) ? parsed.history : [];
+          const migratedAnsweredCount = history.filter((entry) => ["Action answered", "Threat answered", "Combat prevented"].includes(entry.title)).length;
+          const migratedCombatResolvedTurn = history.some((entry) => entry.turn === parsed.turn && ["Attack connected", "Combat prevented", "Combat resolved"].includes(entry.title))
+            ? parsed.turn
+            : null;
+          const savedCombatResolvedTurn = parsed.combatResolvedTurn === null
+            ? null
+            : typeof parsed.combatResolvedTurn === "number" && Number.isInteger(parsed.combatResolvedTurn) && parsed.combatResolvedTurn >= 1 && parsed.combatResolvedTurn <= parsed.turn
+              ? parsed.combatResolvedTurn
+              : undefined;
           // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate client-only persisted state after mount
           setGame({
             ...parsed,
-            version: 3,
+            version: 4,
             opponents: cloneOpponents(parsed.opponents),
-            history: Array.isArray(parsed.history) ? parsed.history : [],
+            history,
             answeredCount: Number.isFinite(parsed.answeredCount) ? Math.max(0, Math.floor(parsed.answeredCount ?? 0)) : migratedAnsweredCount,
+            combatResolvedTurn: parsed.version === 4 && savedCombatResolvedTurn !== undefined ? savedCombatResolvedTurn : migratedCombatResolvedTurn,
           });
         }
       }
@@ -537,7 +548,7 @@ export default function Home() {
       label,
       result.totalDamage === 0 ? "No combat damage reached you." : `${result.totalDamage} combat damage reached you${commanderDamage ? `, including ${commanderDamage} commander damage` : ""}${lifelinkGain ? `; ${game.currentEvent.sourceName} gained ${lifelinkGain} life` : ""}.`,
       result.totalDamage ? "damage" : "success",
-      { userLife: result.life, userCommanderDamage: result.commanderDamage, opponents, gameOver },
+      { userLife: result.life, userCommanderDamage: result.commanderDamage, opponents, gameOver, combatResolvedTurn: game.turn },
       answered,
     );
   }
@@ -581,6 +592,7 @@ export default function Home() {
         opponents: previous.opponents,
         recentTemplateIds,
         activeThreat: Boolean(activeThreat),
+        combatResolvedTurn: previous.combatResolvedTurn,
       });
       return {
         ...previous,
@@ -613,6 +625,7 @@ export default function Home() {
           opponents: previous.opponents,
           recentTemplateIds,
           activeThreat: false,
+          combatResolvedTurn: previous.combatResolvedTurn,
         }),
         responseStage: "prompt",
         resolution: "",
@@ -713,17 +726,21 @@ export default function Home() {
       }
       const activeThreat = previous.activeThreat && opponents.some((opponent) => opponent.id === previous.activeThreat?.ownerId) ? previous.activeThreat : null;
       const history = [historyEntry(previous, "Table updated", "Opponent deck profiles and Commander brackets changed.", "neutral"), ...previous.history].slice(0, 40);
-      // A resolved encounter already consumed this turn; settings must not create a second action.
-      if (previous.responseStage === "resolved") return { ...previous, seed, opponents, activeThreat, history };
+      const isFollowUp = previous.responseStage === "resolved";
+      const recentTemplateIds = isFollowUp ? [previous.currentEvent.templateId, ...previous.recentTemplateIds].slice(0, 3) : previous.recentTemplateIds;
       const eventCounter = previous.eventCounter + 1;
-      const currentEvent = generateEvent({
+      const generatedEvent = generateEvent({
         turn: previous.turn,
         counter: eventCounter,
         seed,
         opponents,
-        recentTemplateIds: previous.recentTemplateIds,
+        recentTemplateIds,
         activeThreat: Boolean(activeThreat),
+        combatResolvedTurn: previous.combatResolvedTurn,
       });
+      const currentEvent: SimEvent = isFollowUp
+        ? { ...generatedEvent, title: `Follow-up action: ${generatedEvent.title}`, tags: ["Follow-up action", ...generatedEvent.tags] }
+        : generatedEvent;
       return {
         ...previous,
         seed,
@@ -733,6 +750,7 @@ export default function Home() {
         responseStage: "prompt",
         resolution: "",
         activeThreat,
+        recentTemplateIds,
         history,
       };
     });
@@ -951,7 +969,7 @@ export default function Home() {
 
               {game.responseStage === "prompt" && game.currentEvent.kind === "development" && (
                 <div className="response-box">
-                  <span className="eyebrow" ref={responseStep} tabIndex={-1}>No new pressure this turn</span>
+                  <span className="eyebrow" ref={responseStep} tabIndex={-1}>No new pressure from this action</span>
                   <div className="response-actions">
                     <button className="primary-button" type="button" onClick={letEventResolve}>Record development <span>→</span></button>
                   </div>
@@ -1129,11 +1147,12 @@ export default function Home() {
             <div className="session-settings">
               <label>Session seed<input value={settingsSeed} onChange={(event) => setSettingsSeed(event.target.value.toUpperCase())} maxLength={24} /></label>
               <p>Reuse a seed with the same choices to replay the same event sequence.</p>
+              <p>Before resolution, applying changes rerolls the pending action. After resolution, it generates one follow-up action this turn. If combat already occurred, the follow-up will not be another combat.</p>
               <div className="bracket-guide"><span className="eyebrow">Bracket guide</span><strong>Official intent, Betafish-tuned odds</strong><p>MTG Betafish translates Wizards’ turn guidance into when pressure and game-ending clocks may appear. It also scales attacks, counters, removal, and defenses as simulation heuristics.</p><ol>{Object.entries(COMMANDER_BRACKETS).map(([value, rules]) => <li key={value}><b>B{value}</b><span>{rules.label}</span><small>{rules.turnGuide}</small></li>)}</ol><a href="https://magic.wizards.com/en/formats/commander" target="_blank" rel="noreferrer">View Wizards’ beta bracket guide ↗</a></div>
               <p>Profiles are abstract matchup presets, not complete color-identity-checked decklists.</p>
             </div>
           </div>
-          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setActiveModal(null)}>Cancel</button><button className="primary-button" type="button" onClick={saveSettings}>{game.responseStage === "resolved" ? "Apply settings" : "Apply and reroll"} <span>→</span></button></div>
+          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setActiveModal(null)}>Cancel</button><button className="primary-button" type="button" onClick={saveSettings}>{game.responseStage === "resolved" ? "Apply and generate follow-up" : "Apply and reroll"} <span>→</span></button></div>
         </Modal>
       )}
 

@@ -63,13 +63,19 @@ test("game-over recovery preserves the expired turn event, undo, and explicit an
   assert.match(sourceSection(pageSource, "function answerDefense()", "function applyOutgoingDamage("), /answeredCount: previous\.answeredCount \+ 1/);
 });
 
-test("resolved table settings cannot create a second opponent action in the same turn", () => {
+test("resolved table settings allow follow-ups while preserving the combat lock", () => {
   const settings = sourceSection(pageSource, "function saveSettings()", "function openCombat()");
-  const resolvedBranch = sourceSection(settings, "if (previous.responseStage === \"resolved\")", "const eventCounter");
+  const incoming = sourceSection(pageSource, "function applyIncoming(", "function submitIncomingDamage(");
+  const hydration = sourceSection(pageSource, "// Persistence is best-effort", "// Move focus only");
 
-  assert.match(resolvedBranch, /return \{ \.\.\.previous, seed, opponents, activeThreat, history \}/);
-  assert.doesNotMatch(resolvedBranch, /generateEvent|eventCounter/);
-  assert.match(settings, /activeThreat: Boolean\(activeThreat\)/);
+  assert.match(settings, /const isFollowUp = previous\.responseStage === "resolved"/);
+  assert.match(settings, /const generatedEvent = generateEvent\(\{/);
+  assert.match(settings, /combatResolvedTurn: previous\.combatResolvedTurn/);
+  assert.match(settings, /title: `Follow-up action:/);
+  assert.match(incoming, /combatResolvedTurn: game\.turn/);
+  assert.doesNotMatch(hydration, /parsed\.currentEvent\.kind === "attack"/);
+  assert.match(hydration, /const savedCombatResolvedTurn = parsed\.combatResolvedTurn === null/);
+  assert.match(hydration, /combatResolvedTurn: parsed\.version === 4 && savedCombatResolvedTurn !== undefined \? savedCombatResolvedTurn : migratedCombatResolvedTurn/);
 });
 
 test("accessible client contracts use one game-over announcement and native combat semantics", () => {
