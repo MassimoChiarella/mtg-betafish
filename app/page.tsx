@@ -68,6 +68,7 @@ type OutgoingAttacker = {
   keywords: Keyword[];
 };
 
+// Keep the legacy key so existing saved sessions survive the product rename.
 const STORAGE_KEY = "goldfish-lab-session-v1";
 const COMBAT_KEYWORDS: Keyword[] = ["Flying", "Trample", "Menace", "Deathtouch", "First strike", "Double strike", "Lifelink"];
 const USER_COMMANDER_LABELS = {
@@ -358,7 +359,7 @@ function Modal({ title, subtitle, onClose, children, wide = false, dismissible =
   return (
     <dialog ref={dialog} className={`modal ${wide ? "modal-wide" : ""}`} aria-labelledby="modal-title" aria-describedby={subtitle ? "modal-description" : undefined}>
       <header className="modal-header">
-        <div><span className="eyebrow">Goldfish Lab</span><h2 id="modal-title">{title}</h2>{subtitle && <p id="modal-description">{subtitle}</p>}</div>
+        <div><span className="eyebrow">MTG Betafish</span><h2 id="modal-title">{title}</h2>{subtitle && <p id="modal-description">{subtitle}</p>}</div>
         {dismissible && <button className="icon-button" type="button" onClick={onClose} aria-label={`Close ${title}`}>×</button>}
       </header>
       {children}
@@ -884,8 +885,8 @@ export default function Home() {
       <div className="sr-only" aria-live="polite" aria-atomic="true">{game.gameOver ? "" : liveMessage}</div>
 
       <header className="topbar">
-        <a className="brand" href="#main-workspace" aria-label="Goldfish Lab home">
-          <span><strong>Goldfish</strong><small>Lab</small></span>
+        <a className="brand" href="#main-workspace" aria-label="MTG Betafish home">
+          <span><strong>MTG</strong><small>Betafish</small></span>
         </a>
         <div className="turn-strip" aria-label={`Turn ${game.turn}`}>
           <span className="eyebrow">Turn {game.turn}</span>
@@ -1121,7 +1122,7 @@ export default function Home() {
             <div className="session-settings">
               <label>Session seed<input value={settingsSeed} onChange={(event) => setSettingsSeed(event.target.value.toUpperCase())} maxLength={24} /></label>
               <p>Reuse a seed with the same choices to replay the same event sequence.</p>
-              <div className="bracket-guide"><span className="eyebrow">Bracket guide</span><strong>Official intent, Lab-tuned odds</strong><p>Goldfish Lab translates Wizards’ turn guidance into when pressure and game-ending clocks may appear. It also scales attacks, counters, removal, and defenses as simulation heuristics.</p><ol>{Object.entries(COMMANDER_BRACKETS).map(([value, rules]) => <li key={value}><b>B{value}</b><span>{rules.label}</span><small>{rules.turnGuide}</small></li>)}</ol><a href="https://magic.wizards.com/en/formats/commander" target="_blank" rel="noreferrer">View Wizards’ beta bracket guide ↗</a></div>
+              <div className="bracket-guide"><span className="eyebrow">Bracket guide</span><strong>Official intent, Betafish-tuned odds</strong><p>MTG Betafish translates Wizards’ turn guidance into when pressure and game-ending clocks may appear. It also scales attacks, counters, removal, and defenses as simulation heuristics.</p><ol>{Object.entries(COMMANDER_BRACKETS).map(([value, rules]) => <li key={value}><b>B{value}</b><span>{rules.label}</span><small>{rules.turnGuide}</small></li>)}</ol><a href="https://magic.wizards.com/en/formats/commander" target="_blank" rel="noreferrer">View Wizards’ beta bracket guide ↗</a></div>
               <p>Profiles are abstract matchup presets, not complete color-identity-checked decklists.</p>
             </div>
           </div>

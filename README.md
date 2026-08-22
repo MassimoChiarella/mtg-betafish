@@ -1,6 +1,6 @@
-# Goldfish Lab
+# MTG Betafish
 
-A browser companion for stress-testing Magic: The Gathering Commander decks while playing them in a separate playtester such as Archidekt. Goldfish Lab supplies the missing table: targeted interaction, wipes, counters, turn-scaled combat, defensive rolls, and countdown threats.
+A browser companion for stress-testing Magic: The Gathering Commander decks while playing them in a separate playtester such as Archidekt. MTG Betafish supplies the missing table: targeted interaction, wipes, counters, turn-scaled combat, defensive rolls, and countdown threats.
 
 ## Run locally
 
@@ -39,4 +39,4 @@ npm run build
 npm test
 ```
 
-Magic: The Gathering and Commander are trademarks of Wizards of the Coast. Goldfish Lab is an unofficial companion and is not affiliated with Wizards of the Coast or Archidekt.
+Magic: The Gathering and Commander are trademarks of Wizards of the Coast. MTG Betafish is an unofficial companion and is not affiliated with Wizards of the Coast or Archidekt.

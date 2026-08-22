@@ -15,25 +15,25 @@ function sourceSection(source, start, end) {
 
 async function render() {
   return worker.fetch(
-    new Request("https://goldfish-lab.example/", { headers: { accept: "text/html", host: "goldfish-lab.example" } }),
+    new Request("https://mtg-betafish.example/", { headers: { accept: "text/html", host: "mtg-betafish.example" } }),
     { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
     { waitUntil() {}, passThroughOnException() {} },
   );
 }
 
-test("server-renders the Goldfish Lab product shell and social metadata", async () => {
+test("server-renders the MTG Betafish product shell and social metadata", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Goldfish Lab — Commander Playtest Companion<\/title>/i);
+  assert.match(html, /<title>MTG Betafish — Commander Playtest Companion<\/title>/i);
   assert.match(html, /The table acts\./);
   assert.match(html, /Assign your combat damage/);
   assert.match(html, /Scenario library/);
   assert.match(html, /The permission to cast spells, activate abilities/);
   assert.match(html, /21 or more combat damage by the same commander/);
-  assert.match(html, /https:\/\/goldfish-lab\.example\/og\.png/);
+  assert.match(html, /https:\/\/mtg-betafish\.example\/og\.png/);
 
   const encounter = html.indexOf('class="encounter-column"');
   const opponents = html.indexOf('class="rail opponents-panel"');
