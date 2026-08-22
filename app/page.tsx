@@ -711,6 +711,10 @@ export default function Home() {
           gameOver: "You eliminated every simulated opponent.",
         };
       }
+      const activeThreat = previous.activeThreat && opponents.some((opponent) => opponent.id === previous.activeThreat?.ownerId) ? previous.activeThreat : null;
+      const history = [historyEntry(previous, "Table updated", "Opponent deck profiles and Commander brackets changed.", "neutral"), ...previous.history].slice(0, 40);
+      // A resolved encounter already consumed this turn; settings must not create a second action.
+      if (previous.responseStage === "resolved") return { ...previous, seed, opponents, activeThreat, history };
       const eventCounter = previous.eventCounter + 1;
       const currentEvent = generateEvent({
         turn: previous.turn,
@@ -718,7 +722,7 @@ export default function Home() {
         seed,
         opponents,
         recentTemplateIds: previous.recentTemplateIds,
-        activeThreat: Boolean(previous.activeThreat && opponents.some((opponent) => opponent.id === previous.activeThreat?.ownerId)),
+        activeThreat: Boolean(activeThreat),
       });
       return {
         ...previous,
@@ -728,8 +732,8 @@ export default function Home() {
         currentEvent,
         responseStage: "prompt",
         resolution: "",
-        activeThreat: previous.activeThreat && opponents.some((opponent) => opponent.id === previous.activeThreat?.ownerId) ? previous.activeThreat : null,
-        history: [historyEntry(previous, "Table updated", "Opponent deck profiles and Commander brackets changed.", "neutral"), ...previous.history].slice(0, 40),
+        activeThreat,
+        history,
       };
     });
     setActiveModal(null);
@@ -915,16 +919,19 @@ export default function Home() {
               <div className="tag-row">{game.currentEvent.tags.map((tag) => <span className="event-tag" key={tag}>{glossaryText(tag, encounterGlossaryTerms)}</span>)}</div>
 
               {game.currentEvent.attackers && (
-                <div className="incoming-attackers">
+                <>
+                <div className="response-heading combat-declaration"><span className="eyebrow">All attackers declared together</span><strong>{game.currentEvent.attackers.length} {game.currentEvent.attackers.length === 1 ? "attacker" : "attackers"}</strong></div>
+                <div className="incoming-attackers" role="list" aria-label={`All ${game.currentEvent.attackers.length} ${game.currentEvent.attackers.length === 1 ? "attacker" : "attackers"} declared together for this combat`}>
                   {game.currentEvent.attackers.map((attacker) => (
-                    <article key={attacker.id}>
+                    <article key={attacker.id} role="listitem">
                       <div><strong>{attacker.name}</strong>{attacker.isCommander && <span className="commander-badge">Commander</span>}</div>
                       <b className="pt">{attacker.power}/{attacker.toughness}</b>
                       <div className="keyword-row">{attacker.keywords.length ? attacker.keywords.map((keyword) => <KeywordChip keyword={keyword} key={keyword} />) : <span className="vanilla">No keywords</span>}</div>
                     </article>
                   ))}
-                  <p className="combat-total"><strong>{incomingTotal}</strong> maximum incoming damage · <strong>{incomingCommanderTotal}</strong> <GlossaryTerm term="Commander damage">commander damage</GlossaryTerm></p>
                 </div>
+                <p className="combat-total"><strong>{incomingTotal}</strong> maximum incoming damage · <strong>{incomingCommanderTotal}</strong> <GlossaryTerm term="Commander damage">commander damage</GlossaryTerm></p>
+                </>
               )}
             </div>
 
@@ -978,10 +985,10 @@ export default function Home() {
 
               {game.responseStage === "prompt" && game.currentEvent.kind === "attack" && (
                 <div className="response-box">
-                  <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>Declare your defense</span><GlossaryHelp terms={["Fog"]} /></div>
+                  <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>Resolve this combat</span><GlossaryHelp terms={["Fog"]} /></div>
                   <div className="response-actions combat-actions">
-                    <button className="primary-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "combat" }))}>Block / interact <span>→</span></button>
-                    <button className="secondary-button" type="button" onClick={() => applyIncoming(incomingRegularTotal, incomingCommanderTotal, "Attack connected", incomingLifelinkTotal)}>Take the hit</button>
+                    <button className="primary-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "combat" }))}>Resolve blocks / interaction <span>→</span></button>
+                    <button className="secondary-button" type="button" onClick={() => applyIncoming(incomingRegularTotal, incomingCommanderTotal, "Attack connected", incomingLifelinkTotal)}>Take the full attack</button>
                     <button className="text-button" type="button" onClick={() => applyIncoming(0, 0, "Combat prevented", 0, true)}>Fog / stop combat</button>
                   </div>
                 </div>
@@ -990,7 +997,7 @@ export default function Home() {
               {game.responseStage === "combat" && (
                 <form className="response-box combat-resolution" onSubmit={submitIncomingDamage}>
                   <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>After blocks and interaction</span><GlossaryHelp terms={incomingLifelinkTotal > 0 ? ["Commander damage", "Lifelink"] : ["Commander damage"]} /></div>
-                  <p>Resolve exact combat in your playtester, then enter only damage that reaches you.</p>
+                  <p>After resolving all attackers above, enter the total damage that reaches you.</p>
                   <div className="damage-inputs">
                     <label>Regular combat damage<input name="incoming-regular" type="number" min="0" max={incomingRegularTotal} defaultValue="0" /></label>
                     <label>Commander combat damage<input name="incoming-commander" type="number" min="0" max={incomingCommanderTotal} defaultValue="0" /></label>
@@ -1126,7 +1133,7 @@ export default function Home() {
               <p>Profiles are abstract matchup presets, not complete color-identity-checked decklists.</p>
             </div>
           </div>
-          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setActiveModal(null)}>Cancel</button><button className="primary-button" type="button" onClick={saveSettings}>Apply and reroll <span>→</span></button></div>
+          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setActiveModal(null)}>Cancel</button><button className="primary-button" type="button" onClick={saveSettings}>{game.responseStage === "resolved" ? "Apply settings" : "Apply and reroll"} <span>→</span></button></div>
         </Modal>
       )}
 

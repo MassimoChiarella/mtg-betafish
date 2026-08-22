@@ -51,6 +51,7 @@ export type SimEvent = {
   prompt: string;
   card: string;
   tags: string[];
+  /** Complete declaration for one combat. Normal combat is never split across events. */
   attackers?: Attacker[];
   threat?: Threat;
 };
@@ -257,7 +258,7 @@ export function eventKindWeights(input: { turn: number; profile: ProfileId; brac
   };
 }
 
-function generateAttack(random: () => number, turn: number, source: Opponent, pace: number, eventId: string): Attacker[] {
+function generateCombatDeclaration(random: () => number, turn: number, source: Opponent, pace: number, eventId: string): Attacker[] {
   const band = attackBand(turn);
   const profile = DECK_PROFILES[source.profile];
   const count = intBetween(random, band.count[0], band.count[1]);
@@ -334,17 +335,17 @@ export function generateEvent(input: {
   const kind = weightedPick(random, eventWeights);
 
   if (kind === "attack") {
-    const attackers = generateAttack(random, effectiveTurn, source, bracketRules.pace, eventId);
+    const attackers = generateCombatDeclaration(random, effectiveTurn, source, bracketRules.pace, eventId);
     return {
       id: eventId,
       templateId: "scaled-attack",
       kind: "attack",
       sourceId: source.id,
       sourceName: source.name,
-      title: `${source.name} sends ${attackers.length === 1 ? "an attacker" : `${attackers.length} attackers`} at you.`,
-      prompt: "Declare blocks or interaction in your playtester, then record the combat damage that gets through.",
+      title: `${source.name} declares ${attackers.length === 1 ? "one attacker" : `all ${attackers.length} attackers`} at you.`,
+      prompt: "These are all attackers declared at you for this combat. Resolve blocks and interaction once, then record the total damage that gets through.",
       card: `${PROFILE_LABELS[source.profile]} combat`,
-      tags: ["Combat", `B${bracket} ${bracketRules.label}`, `Turn ${turn} scaling`],
+      tags: ["Combat", "One combat declaration", `B${bracket} ${bracketRules.label}`, `Turn ${turn} scaling`],
       attackers,
     };
   }

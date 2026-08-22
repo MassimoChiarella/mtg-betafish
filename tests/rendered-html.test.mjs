@@ -63,6 +63,15 @@ test("game-over recovery preserves the expired turn event, undo, and explicit an
   assert.match(sourceSection(pageSource, "function answerDefense()", "function applyOutgoingDamage("), /answeredCount: previous\.answeredCount \+ 1/);
 });
 
+test("resolved table settings cannot create a second opponent action in the same turn", () => {
+  const settings = sourceSection(pageSource, "function saveSettings()", "function openCombat()");
+  const resolvedBranch = sourceSection(settings, "if (previous.responseStage === \"resolved\")", "const eventCounter");
+
+  assert.match(resolvedBranch, /return \{ \.\.\.previous, seed, opponents, activeThreat, history \}/);
+  assert.doesNotMatch(resolvedBranch, /generateEvent|eventCounter/);
+  assert.match(settings, /activeThreat: Boolean\(activeThreat\)/);
+});
+
 test("accessible client contracts use one game-over announcement and native combat semantics", () => {
   assert.equal(pageSource.match(/role="alert"/g)?.length ?? 0, 0);
   assert.match(pageSource, /aria-live="polite" aria-atomic="true">\{game\.gameOver \? "" : liveMessage\}/);

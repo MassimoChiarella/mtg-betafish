@@ -35,6 +35,25 @@ test("seeded events and defenses are repeatable", () => {
   assert.deepEqual(rollDefense(defenseInput), rollDefense(defenseInput));
 });
 
+test("a generated attack declares one atomic attacker batch", () => {
+  const event = generateEvent({
+    turn: 10,
+    counter: 1,
+    seed: "ATOMIC-0",
+    opponents: [{ id: "one", name: "One", profile: "swarm", bracket: 5, life: 40, commanderDamage: {}, eliminated: false }],
+    recentTemplateIds: [],
+    activeThreat: false,
+  });
+  const attackers = event.attackers ?? [];
+
+  assert.equal(event.kind, "attack");
+  assert.ok(attackers.length > 1);
+  assert.deepEqual(new Set(attackers.map(({ id }) => id.replace(/-attacker-\d+$/, ""))), new Set([event.id]));
+  assert.equal(event.title, `One declares all ${attackers.length} attackers at you.`);
+  assert.match(event.prompt, /all attackers.*once/i);
+  assert.ok(event.tags.includes("One combat declaration"));
+});
+
 test("deck profiles expose valid, bracket-safe included cards", () => {
   const templates = new Map(EVENT_TEMPLATES.map((template) => [template.id, template]));
   assert.deepEqual(
