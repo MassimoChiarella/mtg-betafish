@@ -80,6 +80,29 @@ export const KEYWORD_DEFINITIONS: Record<Keyword, string> = {
   Lifelink: "Its controller gains that much life when it deals damage.",
 };
 
+export const GLOSSARY_DEFINITIONS = {
+  ...KEYWORD_DEFINITIONS,
+  Priority: "The permission to cast spells, activate abilities, and take certain special actions. Players receive it one at a time.",
+  Counter: "Stop a spell or ability on the stack so it does not resolve. A countered spell normally goes to its owner’s graveyard.",
+  Destroy: "Move a permanent from the battlefield to its owner’s graveyard. Indestructible and regeneration can prevent this.",
+  Exile: "Move a card or permanent to the exile zone. Exiling is different from destroying.",
+  "Board wipe": "An informal term for a spell or ability that removes many or all permanents of a kind from the battlefield.",
+  Stack: "The game zone where spells and most abilities wait to resolve, newest first.",
+  "Stack interaction": "Spells or abilities used while other spells or abilities are waiting on the stack, such as counters or redirection.",
+  "Legal target": "An object or player that satisfies every targeting restriction of the spell or ability.",
+  Hexproof: "A permanent or player with hexproof can’t be targeted by spells or abilities an opponent controls.",
+  Indestructible: "Can’t be destroyed by damage or effects that say “destroy.” A creature can still be exiled, sacrificed, or put into a graveyard for having 0 or less toughness.",
+  "Phase out": "Treat the permanent and anything attached to it as though they don’t exist until it phases in, usually during its controller’s next untap step.",
+  Sacrifice: "Its controller moves it from the battlefield to the graveyard. This is not destruction.",
+  Blink: "An informal term for exiling a permanent and then returning it to the battlefield, usually immediately.",
+  Bounce: "An informal term for returning a permanent to its owner’s hand.",
+  Fog: "An informal term for an effect that prevents combat damage, named after the card Fog.",
+  Goad: "Until your next turn, the creature attacks each combat if able and attacks a player other than you if able.",
+  "Commander damage": "A player who has been dealt 21 or more combat damage by the same commander over the game loses.",
+} as const;
+
+export type GlossaryKey = keyof typeof GLOSSARY_DEFINITIONS;
+
 export const COMMANDER_BRACKETS: Record<CommanderBracket, {
   label: string;
   summary: string;

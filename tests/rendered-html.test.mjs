@@ -31,6 +31,8 @@ test("server-renders the Goldfish Lab product shell and social metadata", async 
   assert.match(html, /The table acts\./);
   assert.match(html, /Assign your combat damage/);
   assert.match(html, /Scenario library/);
+  assert.match(html, /The permission to cast spells, activate abilities/);
+  assert.match(html, /21 or more combat damage by the same commander/);
   assert.match(html, /https:\/\/goldfish-lab\.example\/og\.png/);
 
   const encounter = html.indexOf('class="encounter-column"');
@@ -65,6 +67,8 @@ test("accessible client contracts use one game-over announcement and native comb
   assert.equal(pageSource.match(/role="alert"/g)?.length ?? 0, 0);
   assert.match(pageSource, /aria-live="polite" aria-atomic="true">\{game\.gameOver \? "" : liveMessage\}/);
   assert.equal(pageSource.match(/subtitle=\{game\.gameOver\}/g)?.length ?? 0, 1);
+  assert.doesNotMatch(pageSource, /className="resolved-box" role="status"/);
+  assert.doesNotMatch(pageSource, /className=\{`defense-result \$\{defense\.type\}`\} role="status"/);
 
   assert.match(pageSource, /<form className="attacker-form" onSubmit=\{addOutgoingAttacker\}>/);
   assert.match(sourceSection(pageSource, "function addOutgoingAttacker(", "function removeOutgoingAttacker("), /event\.preventDefault\(\)/);
@@ -77,5 +81,104 @@ test("accessible client contracts use one game-over announcement and native comb
   assert.match(cssSource, /\.pressure-panel \{ grid-area: pressure; \}/);
   const mobileStyles = sourceSection(cssSource, "@media (max-width: 820px)", "@media (max-width: 520px)");
   assert.match(mobileStyles, /\.workspace \{[^}]*display: flex/);
-  assert.doesNotMatch(mobileStyles, /order\s*:/);
+  assert.doesNotMatch(mobileStyles, /(?:^|[;{])\s*order\s*:/m);
+});
+
+test("mobile turn flow keeps context, shortcuts, and touch controls reachable", () => {
+  const focusFlow = sourceSection(pageSource, "const encounterHeading", "function commit(");
+  assert.match(focusFlow, /const previousEventKey = useRef\(`\$\{game\.seed\}:\$\{game\.eventCounter\}`\)/);
+  assert.match(focusFlow, /if \(previousEventKey\.current !== eventKey\) encounterHeading\.current\?\.focus\(\)/);
+  assert.match(focusFlow, /else if \(previousResponseStage\.current !== game\.responseStage\) responseStep\.current\?\.focus\(\)/);
+  assert.match(pageSource, /<h1 id="encounter-title" ref=\{encounterHeading\} tabIndex=\{-1\}>/);
+
+  const summary = pageSource.indexOf('className="mobile-turn-summary"');
+  const nextAction = pageSource.indexOf('className="next-action"');
+  const opponents = pageSource.indexOf('className="rail opponents-panel"');
+  assert.ok(summary >= 0 && summary < nextAction && nextAction < opponents, "mobile turn shortcuts should precede Next turn and the long opponent rail");
+  const summarySource = sourceSection(pageSource, '<section className="mobile-turn-summary"', '<div className="next-action">');
+  assert.match(summarySource, /game\.userLife/);
+  assert.match(summarySource, /game\.activeThreat\.remaining/);
+  assert.match(summarySource, /onClick=\{openCombat\}/);
+  assert.match(summarySource, /onClick=\{openSettings\}/);
+
+  const touchStyles = sourceSection(cssSource, "@media (max-width: 900px), (pointer: coarse)", "@media (max-width: 820px)");
+  const mobileStyles = sourceSection(cssSource, "@media (max-width: 820px)", "@media (max-width: 520px)");
+  assert.match(mobileStyles, /\.mobile-turn-summary \{[^}]*display: grid/);
+  assert.match(touchStyles, /\.life-control > button \{[^}]*width: 44px; height: 44px/);
+  assert.match(touchStyles, /\.outgoing-list > article > button \{[^}]*width: 44px; height: 44px/);
+  assert.match(touchStyles, /\.glossary-help-trigger[^\n]+min-width: 44px; min-height: 44px/);
+  assert.match(touchStyles, /\.damage-inputs input[^\n]+font-size: 16px/);
+
+  const phoneStyles = sourceSection(cssSource, "@media (max-width: 520px)", "@media (max-width: 460px)");
+  assert.match(phoneStyles, /\.modal \{[^}]*max-height: 94dvh/);
+  assert.match(phoneStyles, /\.spell-art \{ height: 84px; \}/);
+  assert.match(cssSource, /\.modal \{[^}]*max-height: calc\(100dvh - 48px\)/);
+  assert.match(cssSource, /\.modal > \.modal-actions \{[^}]*position: sticky;[^}]*env\(safe-area-inset-bottom\)/);
+});
+
+test("glossary previews stay separate from one-click game actions", () => {
+  const hoverHook = sourceSection(pageSource, "function useHoverPreview<", "function CardPreview(");
+  const cardPreview = sourceSection(pageSource, "function CardPreview(", "function GlossaryTerm(");
+  const glossaryTerm = sourceSection(pageSource, "function GlossaryTerm(", "function GlossaryExplanation(");
+  const glossaryHelp = sourceSection(pageSource, "function GlossaryHelp(", "function glossaryText(");
+  const glossaryText = sourceSection(pageSource, "function glossaryText(", "function Modal(");
+
+  assert.match(hoverHook, /getBoundingClientRect\(\)/);
+  assert.match(hoverHook, /function preparePreview\(\)/);
+  assert.match(hoverHook, /if \(!panel\.matches\(":popover-open"\)\) onShow\?\.\(\)/);
+  assert.match(hoverHook, /showPopover\(\)/);
+  assert.match(hoverHook, /hidePopover\(\)/);
+  assert.match(hoverHook, /clearTimeout\(hoverTimer\.current\)/);
+  assert.match(cardPreview, /useHoverPreview<HTMLButtonElement>/);
+  assert.match(cardPreview, /popoverTarget=\{previewId\}/);
+  assert.match(cardPreview, /popoverTargetAction="toggle"/);
+  assert.match(cardPreview, /onClick=\{preparePreview\}/);
+  assert.match(glossaryTerm, /useHoverPreview<HTMLButtonElement>/);
+  assert.match(glossaryTerm, /aria-describedby=\{previewId\}/);
+  assert.match(glossaryTerm, /popoverTarget=\{previewId\}/);
+  assert.match(glossaryTerm, /popoverTargetAction="toggle"/);
+  assert.match(glossaryTerm, /onPointerEnter=[^\n]+showPreview\(160\)/);
+  assert.match(glossaryTerm, /onPointerLeave=[^\n]+closePreview\(160\)/);
+  assert.match(glossaryTerm, /matches\(":focus-visible"\)/);
+  assert.match(glossaryTerm, /onBlur=/);
+  assert.match(glossaryTerm, /onClick=\{preparePreview\}/);
+  assert.match(glossaryTerm, /event\.key === "Escape"/);
+  assert.match(glossaryTerm, /role="tooltip"/);
+  assert.match(glossaryTerm, /popover="auto"/);
+  assert.match(glossaryTerm, /GLOSSARY_DEFINITIONS\[term\]/);
+  assert.match(glossaryHelp, /label = "Rules help"/);
+  assert.match(glossaryHelp, /popoverTarget=\{previewId\}/);
+  assert.match(glossaryHelp, /popoverTargetAction="toggle"/);
+  assert.match(glossaryHelp, /onClick=\{preparePreview\}/);
+  assert.match(glossaryHelp, /<GlossaryExplanation terms=\{terms\}/);
+  assert.match(glossaryText, /text\.split\(GLOSSARY_PATTERN\)/);
+  assert.match(glossaryText, /seen\?\.has\(term\)/);
+  assert.match(glossaryText, /seen\?\.add\(term\)/);
+  assert.match(glossaryText, /<GlossaryTerm term=\{term\}/);
+
+  assert.match(pageSource, /glossaryText\(EVENT_PRESENTATION\[game\.currentEvent\.kind\]\.label, encounterGlossaryTerms\)/);
+  assert.match(pageSource, /glossaryText\(game\.currentEvent\.prompt, encounterGlossaryTerms\)/);
+  assert.match(pageSource, /glossaryText\(tag, encounterGlossaryTerms\)/);
+  assert.match(pageSource, /<GlossaryHelp terms=\{\["Legal target"\]\}/);
+  assert.match(pageSource, /<GlossaryHelp terms=\{\["Counter", "Hexproof", "Indestructible", "Phase out", "Legal target", "Sacrifice", "Blink", "Bounce"\]\}/);
+  assert.match(pageSource, /<button type="button" onClick=\{\(\) => answerEvent\("protect"\)\}/);
+  assert.match(pageSource, /<GlossaryHelp terms=\{\["Fog"\]\}/);
+  assert.match(pageSource, /<button className="text-button" type="button" onClick=\{\(\) => applyIncoming\(0, 0, "Combat prevented", 0, true\)\}>Fog \/ stop combat<\/button>/);
+  assert.match(pageSource, /<label>Commander combat damage<input name="incoming-commander"/);
+  assert.match(pageSource, /<label>Lifelink damage dealt<input name="incoming-lifelink"/);
+  assert.match(pageSource, /<GlossaryHelp label="Keyword help" terms=\{COMBAT_KEYWORDS\}/);
+  assert.match(pageSource, /COMBAT_KEYWORDS\.map\(\(keyword\) => <label key=\{keyword\}><input type="checkbox"[^>]+onChange=/);
+  assert.match(pageSource, /<GlossaryText text=\{profile\.description\}/);
+  assert.match(pageSource, /<h3><GlossaryText text=\{group\.archetype\}/);
+  assert.doesNotMatch(pageSource, /<details className="keyword-chip"/);
+  assert.doesNotMatch(pageSource, /GlossaryAction|GlossaryActionText|previewTouch|tap again to choose|aria-pressed=\{selected\}|onToggle/);
+
+  assert.match(cssSource, /\.preview-panel \{[^}]*position: fixed/);
+  assert.match(cssSource, /\.preview-panel\[data-side="above"\]/);
+  assert.match(cssSource, /\.glossary-preview-panel \{[^}]*white-space: normal/);
+  assert.match(cssSource, /\.glossary-preview-panel:popover-open/);
+  assert.match(cssSource, /\.glossary-help-trigger \{[^}]*min-height: 24px/);
+  assert.match(cssSource, /\.keyword-picker label \{/);
+  assert.match(cssSource, /\.keyword-picker input \{/);
+  assert.doesNotMatch(cssSource, /glossary-touch-hint|glossary-action-term|keyword-option/);
 });

@@ -9,9 +9,9 @@ import {
   counterBacks,
   DECK_PROFILES,
   generateEvent,
+  GLOSSARY_DEFINITIONS,
   incomingCommanderDamage,
   incomingDamage,
-  KEYWORD_DEFINITIONS,
   normalizeCommanderBracket,
   opponentCommanderKey,
   PROFILE_LABELS,
@@ -20,6 +20,7 @@ import {
   type CommanderBracket,
   type CommanderSlot,
   type DefenseResult,
+  type GlossaryKey,
   type Keyword,
   type Opponent,
   type ProfileId,
@@ -144,46 +145,52 @@ const EVENT_PRESENTATION = {
   development: { label: "Table development", glyph: "…" },
 } satisfies Record<SimEvent["kind"], { label: string; glyph: string }>;
 
-function CardPreview({ name, lookupName = name }: { name: string; lookupName?: string | null }) {
+const GLOSSARY_MATCHES = {
+  ...Object.fromEntries(Object.keys(GLOSSARY_DEFINITIONS).map((term) => [term.toLowerCase(), term as GlossaryKey])),
+  countered: "Counter",
+  counters: "Counter",
+  destroyed: "Destroy",
+  destroys: "Destroy",
+  exiled: "Exile",
+  exiles: "Exile",
+  goaded: "Goad",
+  "phased out": "Phase out",
+  sacrificed: "Sacrifice",
+  blinked: "Blink",
+  bounced: "Bounce",
+} as Record<string, GlossaryKey>;
+const GLOSSARY_PATTERN = new RegExp(`\\b(${Object.keys(GLOSSARY_MATCHES).sort((a, b) => b.length - a.length).join("|")})\\b`, "gi");
+
+function useHoverPreview<T extends HTMLElement>(width: number, height: number, onShow?: () => void) {
   const previewId = useId();
-  const trigger = useRef<HTMLButtonElement>(null);
+  const trigger = useRef<T>(null);
   const preview = useRef<HTMLSpanElement>(null);
   const hoverTimer = useRef<number>(undefined);
-  const [requestedName, setRequestedName] = useState<string>();
-  const [result, setResult] = useState<{ name: string; image: string | null }>();
-  const [loadedImage, setLoadedImage] = useState<string>();
-  const [failedImage, setFailedImage] = useState<string>();
-  const image = result?.name === lookupName ? result.image : undefined;
-
-  useEffect(() => {
-    if (!lookupName || requestedName !== lookupName || image !== undefined) return;
-    let active = true;
-    void loadCardImage(lookupName).then((url) => { if (active) setResult({ name: lookupName, image: url }); });
-    return () => { active = false; };
-  }, [image, lookupName, requestedName]);
 
   useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
 
-  if (!lookupName) return name;
-  const cardName = lookupName;
+  function preparePreview() {
+    window.clearTimeout(hoverTimer.current);
+    const target = trigger.current;
+    const panel = preview.current;
+    if (!target || !panel) return;
+    const rect = target.getBoundingClientRect();
+    const panelWidth = Math.min(width, window.innerWidth - 24);
+    const roomAbove = rect.top - 12;
+    const roomBelow = window.innerHeight - rect.bottom - 12;
+    const side = Math.max(roomAbove, roomBelow) < height ? "center" : roomAbove > roomBelow ? "above" : "below";
+    panel.style.left = `${Math.max(12, Math.min(window.innerWidth - panelWidth - 12, rect.left + rect.width / 2 - panelWidth / 2))}px`;
+    panel.style.top = `${side === "above" ? rect.top - 10 : side === "below" ? rect.bottom + 10 : 12}px`;
+    panel.dataset.side = side;
+    if (!panel.matches(":popover-open")) onShow?.();
+  }
 
   function showPreview(delay = 0) {
     window.clearTimeout(hoverTimer.current);
     hoverTimer.current = window.setTimeout(() => {
-      const target = trigger.current;
+      preparePreview();
       const panel = preview.current;
-      if (!target || !panel) return;
-      const rect = target.getBoundingClientRect();
-      const width = Math.min(220, window.innerWidth - 24);
-      const roomAbove = rect.top - 12;
-      const roomBelow = window.innerHeight - rect.bottom - 12;
-      const side = Math.max(roomAbove, roomBelow) < 320 ? "center" : roomAbove > roomBelow ? "above" : "below";
-      panel.style.left = `${Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2))}px`;
-      panel.style.top = `${side === "above" ? rect.top - 10 : side === "below" ? rect.bottom + 10 : 12}px`;
-      panel.dataset.side = side;
-      setResult((current) => current?.name === cardName && current.image === null ? undefined : current);
-      setFailedImage((current) => current === image ? undefined : current);
-      setRequestedName(cardName);
+      if (!panel) return;
       if (!panel.matches(":popover-open")) panel.showPopover();
     }, delay);
   }
@@ -196,21 +203,53 @@ function CardPreview({ name, lookupName = name }: { name: string; lookupName?: s
     }, delay);
   }
 
+  function keepPreviewOpen() {
+    window.clearTimeout(hoverTimer.current);
+  }
+
+  return { previewId, trigger, preview, preparePreview, showPreview, closePreview, keepPreviewOpen };
+}
+
+function CardPreview({ name, lookupName = name }: { name: string; lookupName?: string | null }) {
+  const [requestedName, setRequestedName] = useState<string>();
+  const [result, setResult] = useState<{ name: string; image: string | null }>();
+  const [loadedImage, setLoadedImage] = useState<string>();
+  const [failedImage, setFailedImage] = useState<string>();
+  const image = result?.name === lookupName ? result.image : undefined;
+  const { previewId, trigger, preview, preparePreview, showPreview, closePreview, keepPreviewOpen } = useHoverPreview<HTMLButtonElement>(220, 320, () => {
+    if (!lookupName) return;
+    setResult((current) => current?.name === lookupName && current.image === null ? undefined : current);
+    setFailedImage((current) => current === image ? undefined : current);
+    setRequestedName(lookupName);
+  });
+
+  useEffect(() => {
+    if (!lookupName || requestedName !== lookupName || image !== undefined) return;
+    let active = true;
+    void loadCardImage(lookupName).then((url) => { if (active) setResult({ name: lookupName, image: url }); });
+    return () => { active = false; };
+  }, [image, lookupName, requestedName]);
+
+  if (!lookupName) return name;
+  const cardName = lookupName;
+
   return (
     <span className="card-preview">
       <button
-        className="card-preview-trigger"
+        className="preview-trigger card-preview-trigger"
         type="button"
         ref={trigger}
         aria-describedby={previewId}
+        popoverTarget={previewId}
+        popoverTargetAction="toggle"
         onPointerEnter={(event) => { if (event.pointerType !== "touch") showPreview(160); }}
         onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== event.currentTarget) closePreview(160); }}
-        onFocus={() => showPreview()}
+        onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) showPreview(); }}
         onBlur={() => closePreview()}
-        onClick={() => showPreview()}
+        onClick={preparePreview}
         onKeyDown={(event) => { if (event.key === "Escape") closePreview(); }}
       >{name}</button>
-      <span className="card-preview-panel" id={previewId} role="tooltip" ref={preview} popover="auto" onPointerEnter={() => window.clearTimeout(hoverTimer.current)} onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== trigger.current) closePreview(160); }}>
+      <span className="preview-panel card-preview-panel" id={previewId} role="tooltip" ref={preview} popover="auto" onPointerEnter={keepPreviewOpen} onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== trigger.current) closePreview(160); }}>
         {(image === undefined || (image && loadedImage !== image && failedImage !== image)) && <span className="card-preview-status" role="status">Loading card image…</span>}
         {(image === null || failedImage === image) && <span className="card-preview-status" role="status">Card image unavailable.</span>}
         {/* eslint-disable-next-line @next/next/no-img-element -- Scryfall provides runtime image URLs */}
@@ -218,6 +257,73 @@ function CardPreview({ name, lookupName = name }: { name: string; lookupName?: s
       </span>
     </span>
   );
+}
+
+function GlossaryTerm({ term, children = term, className = "" }: { term: GlossaryKey; children?: React.ReactNode; className?: string }) {
+  const { previewId, trigger, preview, preparePreview, showPreview, closePreview, keepPreviewOpen } = useHoverPreview<HTMLButtonElement>(260, 140);
+  return (
+    <span className={`glossary-preview${className ? ` ${className}` : ""}`}>
+      <button
+        className="preview-trigger glossary-preview-trigger"
+        type="button"
+        ref={trigger}
+        aria-describedby={previewId}
+        popoverTarget={previewId}
+        popoverTargetAction="toggle"
+        onPointerEnter={(event) => { if (event.pointerType !== "touch") showPreview(160); }}
+        onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== event.currentTarget) closePreview(160); }}
+        onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) showPreview(); }}
+        onBlur={() => closePreview()}
+        onClick={preparePreview}
+        onKeyDown={(event) => { if (event.key === "Escape") closePreview(); }}
+      >{children}</button>
+      <span className="preview-panel glossary-preview-panel" id={previewId} role="tooltip" ref={preview} popover="auto" onPointerEnter={keepPreviewOpen} onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== trigger.current) closePreview(160); }}>
+        {GLOSSARY_DEFINITIONS[term]}
+      </span>
+    </span>
+  );
+}
+
+function GlossaryExplanation({ terms }: { terms: readonly GlossaryKey[] }) {
+  if (terms.length === 1) return GLOSSARY_DEFINITIONS[terms[0]];
+  return <span className="glossary-definition-list">{terms.map((term) => <span key={term}><strong>{term}</strong><span>{GLOSSARY_DEFINITIONS[term]}</span></span>)}</span>;
+}
+
+function GlossaryHelp({ terms, label = "Rules help" }: { terms: readonly GlossaryKey[]; label?: string }) {
+  const { previewId, trigger, preview, preparePreview, showPreview, closePreview, keepPreviewOpen } = useHoverPreview<HTMLButtonElement>(260, 320);
+  return (
+    <span className="glossary-help">
+      <button
+        className="preview-trigger glossary-help-trigger"
+        type="button"
+        ref={trigger}
+        aria-describedby={previewId}
+        popoverTarget={previewId}
+        popoverTargetAction="toggle"
+        onPointerEnter={(event) => { if (event.pointerType !== "touch") showPreview(160); }}
+        onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== event.currentTarget) closePreview(160); }}
+        onBlur={() => closePreview()}
+        onClick={preparePreview}
+        onKeyDown={(event) => { if (event.key === "Escape") closePreview(); }}
+      ><span aria-hidden="true">?</span> {label}</button>
+      <span className="preview-panel glossary-preview-panel" id={previewId} role="tooltip" ref={preview} popover="auto" onPointerEnter={keepPreviewOpen} onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== trigger.current) closePreview(160); }}>
+        <GlossaryExplanation terms={terms} />
+      </span>
+    </span>
+  );
+}
+
+function glossaryText(text: string, seen?: Set<GlossaryKey>) {
+  return text.split(GLOSSARY_PATTERN).map((part, index) => {
+    const term = GLOSSARY_MATCHES[part.toLowerCase()];
+    if (!term || seen?.has(term)) return part;
+    seen?.add(term);
+    return <GlossaryTerm term={term} key={`${part}-${index}`}>{part}</GlossaryTerm>;
+  });
+}
+
+function GlossaryText({ text }: { text: string }) {
+  return glossaryText(text);
 }
 
 function Modal({ title, subtitle, onClose, children, wide = false, dismissible = true }: {
@@ -260,7 +366,7 @@ function Modal({ title, subtitle, onClose, children, wide = false, dismissible =
 }
 
 function KeywordChip({ keyword }: { keyword: Keyword }) {
-  return <details className="keyword-chip"><summary>{keyword}</summary><span>{KEYWORD_DEFINITIONS[keyword]}</span></details>;
+  return <GlossaryTerm term={keyword} className="keyword-chip" />;
 }
 
 function CommanderLedger({ damage, labels = {}, dark = false }: { damage: Record<string, number>; labels?: Record<string, string>; dark?: boolean }) {
@@ -277,7 +383,9 @@ export default function Home() {
   const [game, setGame] = useState<GameState>(() => createInitialGame());
   const [hydrated, setHydrated] = useState(false);
   const undoStack = useRef<GameState[]>([]);
+  const encounterHeading = useRef<HTMLHeadingElement>(null);
   const responseStep = useRef<HTMLSpanElement>(null);
+  const previousEventKey = useRef(`${game.seed}:${game.eventCounter}`);
   const previousResponseStage = useRef(game.responseStage);
   const defenseResult = useRef<HTMLDivElement>(null);
   const threatHeading = useRef<HTMLHeadingElement>(null);
@@ -331,9 +439,12 @@ export default function Home() {
   }, [game, hydrated]);
 
   useEffect(() => {
-    if (previousResponseStage.current !== game.responseStage) responseStep.current?.focus();
+    const eventKey = `${game.seed}:${game.eventCounter}`;
+    if (previousEventKey.current !== eventKey) encounterHeading.current?.focus();
+    else if (previousResponseStage.current !== game.responseStage) responseStep.current?.focus();
+    previousEventKey.current = eventKey;
     previousResponseStage.current = game.responseStage;
-  }, [game.responseStage]);
+  }, [game.eventCounter, game.responseStage, game.seed]);
 
   useEffect(() => {
     if (activeModal === "combat" && defense) defenseResult.current?.focus();
@@ -755,6 +866,10 @@ export default function Home() {
   const opponentCommanderLabels = Object.fromEntries(game.opponents.map((opponent) => [opponentCommanderKey(opponent.id), `${opponent.name}’s commander`]));
   const removedAttackerId = defense?.type === "removal" ? [...outgoingAttackers].sort((a, b) => b.power - a.power)[0]?.id : undefined;
   const outgoingDamageLimit = defense?.type === "fog" ? { regular: 0, commander: {} as Record<string, number>, lifelink: 0 } : fullCombatDamage(outgoingAttackers, removedAttackerId);
+  const encounterGlossaryTerms = new Set<GlossaryKey>();
+  const outgoingDamageTerms: GlossaryKey[] = [];
+  if (outgoingAttackers.some((attacker) => attacker.isCommander)) outgoingDamageTerms.push("Commander damage");
+  if (outgoingDamageLimit.lifelink > 0) outgoingDamageTerms.push("Lifelink");
   const liveMessage = (activeModal === "combat" && defense ? `Defense roll: ${defense.title}. ${defense.detail}` : null)
     ?? (game.responseStage === "counterback" ? "Your counter was countered. Choose whether to answer again or let the original action resolve." : null)
     ?? (game.responseStage === "choose" ? "Response choices are ready: counter, protect, redirect, or use another answer." : null)
@@ -770,7 +885,7 @@ export default function Home() {
         </a>
         <div className="turn-strip" aria-label={`Turn ${game.turn}`}>
           <span className="eyebrow">Turn {game.turn}</span>
-          <b>{game.responseStage !== "resolved" ? "Table has priority" : "Ready to advance"}</b>
+          <b>{game.responseStage !== "resolved" ? <>Table has <GlossaryTerm term="Priority">priority</GlossaryTerm></> : "Ready to advance"}</b>
         </div>
         <button className="link-button top-action" type="button" onClick={openSettings}>Table setup</button>
       </header>
@@ -778,21 +893,21 @@ export default function Home() {
       <section className="workspace" id="main-workspace">
         <section className="encounter-column" aria-labelledby="encounter-title">
           <div className="encounter-intro">
-            <div><span className="eyebrow">{game.responseStage !== "resolved" ? "Priority check" : "Outcome recorded"}</span><h1 id="encounter-title">{game.responseStage !== "resolved" ? "The table acts." : "Action resolved."}</h1></div>
+            <div><span className="eyebrow">{game.responseStage !== "resolved" ? "Priority check" : "Outcome recorded"}</span><h1 id="encounter-title" ref={encounterHeading} tabIndex={-1}>{game.responseStage !== "resolved" ? "The table acts." : "Action resolved."}</h1></div>
             <span className="event-number">Event {String(game.eventCounter).padStart(2, "0")}</span>
           </div>
 
           <article className={`encounter-card event-${game.currentEvent.kind}`}>
             <div className="card-topline">
-              <span className="event-type"><i aria-hidden="true">✦</i> {EVENT_PRESENTATION[game.currentEvent.kind].label}</span>
+              <span className="event-type"><i aria-hidden="true">✦</i> {glossaryText(EVENT_PRESENTATION[game.currentEvent.kind].label, encounterGlossaryTerms)}</span>
               <span className={game.currentEvent.kind === "threat" ? "danger-badge" : "source-badge"}>{game.currentEvent.sourceName} · <CardPreview name={game.currentEvent.card} lookupName={eventCardLookup} /></span>
             </div>
             <div className={`spell-art spell-art-${game.currentEvent.kind}`} aria-hidden="true"><span>{EVENT_PRESENTATION[game.currentEvent.kind].glyph}</span></div>
             <div className="encounter-copy">
               <p className="source"><span className="avatar avatar-1">{game.currentEvent.sourceName.slice(0, 1)}</span> {game.currentEvent.sourceName} takes an action</p>
-              <h2>{game.currentEvent.title}</h2>
-              <p>{game.currentEvent.prompt}</p>
-              <div className="tag-row">{game.currentEvent.tags.map((tag) => <span className="event-tag" key={tag}>{tag}</span>)}</div>
+              <h2>{glossaryText(game.currentEvent.title, encounterGlossaryTerms)}</h2>
+              <p>{glossaryText(game.currentEvent.prompt, encounterGlossaryTerms)}</p>
+              <div className="tag-row">{game.currentEvent.tags.map((tag) => <span className="event-tag" key={tag}>{glossaryText(tag, encounterGlossaryTerms)}</span>)}</div>
 
               {game.currentEvent.attackers && (
                 <div className="incoming-attackers">
@@ -803,7 +918,7 @@ export default function Home() {
                       <div className="keyword-row">{attacker.keywords.length ? attacker.keywords.map((keyword) => <KeywordChip keyword={keyword} key={keyword} />) : <span className="vanilla">No keywords</span>}</div>
                     </article>
                   ))}
-                  <p className="combat-total"><strong>{incomingTotal}</strong> maximum incoming damage · <strong>{incomingCommanderTotal}</strong> commander</p>
+                  <p className="combat-total"><strong>{incomingTotal}</strong> maximum incoming damage · <strong>{incomingCommanderTotal}</strong> <GlossaryTerm term="Commander damage">commander damage</GlossaryTerm></p>
                 </div>
               )}
             </div>
@@ -811,11 +926,13 @@ export default function Home() {
             <fieldset className="event-fieldset" disabled={game.responseStage === "resolved"}>
               {game.responseStage === "prompt" && game.currentEvent.kind !== "attack" && game.currentEvent.kind !== "development" && (
                 <div className="response-box">
-                  <span className="eyebrow" ref={responseStep} tabIndex={-1}>Do you have a response?</span>
+                  <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>Do you have a response?</span>{game.currentEvent.kind !== "threat" && (game.currentEvent.kind === "targeted" || game.currentEvent.kind === "counter") && <GlossaryHelp terms={["Legal target"]} />}</div>
                   <div className="response-actions">
                     <button className="primary-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "choose" }))}>Yes, I respond <span>→</span></button>
                     <button className="secondary-button" type="button" onClick={letEventResolve}>No response</button>
-                    {game.currentEvent.kind !== "threat" && <button className="text-button" type="button" onClick={() => resolveEvent("Action misses", "No game object was affected, so the generated action has no effect.", "neutral")}>{game.currentEvent.kind === "targeted" || game.currentEvent.kind === "counter" ? "No legal target" : "Nothing affected"}</button>}
+                    {game.currentEvent.kind !== "threat" && (game.currentEvent.kind === "targeted" || game.currentEvent.kind === "counter"
+                      ? <button className="text-button" type="button" onClick={() => resolveEvent("Action misses", "No game object was affected, so the generated action has no effect.", "neutral")}>No legal target</button>
+                      : <button className="text-button" type="button" onClick={() => resolveEvent("Action misses", "No game object was affected, so the generated action has no effect.", "neutral")}>Nothing affected</button>)}
                   </div>
                 </div>
               )}
@@ -831,7 +948,7 @@ export default function Home() {
 
               {game.responseStage === "choose" && (
                 <div className="response-box response-choice-box">
-                  <span className="eyebrow" ref={responseStep} tabIndex={-1}>Choose the line you used</span>
+                  <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>Choose the line you used</span><GlossaryHelp terms={["Counter", "Hexproof", "Indestructible", "Phase out", "Legal target", "Sacrifice", "Blink", "Bounce"]} /></div>
                   <div className="choice-grid">
                     <button type="button" onClick={() => answerEvent("counter")}><strong>Counter it</strong><small>The source may fight back.</small></button>
                     <button type="button" onClick={() => answerEvent("protect")}><strong>Protect it</strong><small>Hexproof, indestructible, phase out.</small></button>
@@ -844,7 +961,7 @@ export default function Home() {
 
               {game.responseStage === "counterback" && (
                 <div className="response-box counterback-box">
-                  <span className="danger-badge" ref={responseStep} tabIndex={-1}>Counter to your counter</span>
+                  <span className="danger-badge" ref={responseStep} tabIndex={-1}><GlossaryTerm term="Counter">Counter</GlossaryTerm> to your counter</span>
                   <h3>Your answer is countered.</h3>
                   <p>You have one final response window before the original action resolves.</p>
                   <div className="response-actions two-actions">
@@ -856,7 +973,7 @@ export default function Home() {
 
               {game.responseStage === "prompt" && game.currentEvent.kind === "attack" && (
                 <div className="response-box">
-                  <span className="eyebrow" ref={responseStep} tabIndex={-1}>Declare your defense</span>
+                  <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>Declare your defense</span><GlossaryHelp terms={["Fog"]} /></div>
                   <div className="response-actions combat-actions">
                     <button className="primary-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "combat" }))}>Block / interact <span>→</span></button>
                     <button className="secondary-button" type="button" onClick={() => applyIncoming(incomingRegularTotal, incomingCommanderTotal, "Attack connected", incomingLifelinkTotal)}>Take the hit</button>
@@ -867,7 +984,7 @@ export default function Home() {
 
               {game.responseStage === "combat" && (
                 <form className="response-box combat-resolution" onSubmit={submitIncomingDamage}>
-                  <span className="eyebrow" ref={responseStep} tabIndex={-1}>After blocks and interaction</span>
+                  <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>After blocks and interaction</span><GlossaryHelp terms={incomingLifelinkTotal > 0 ? ["Commander damage", "Lifelink"] : ["Commander damage"]} /></div>
                   <p>Resolve exact combat in your playtester, then enter only damage that reaches you.</p>
                   <div className="damage-inputs">
                     <label>Regular combat damage<input name="incoming-regular" type="number" min="0" max={incomingRegularTotal} defaultValue="0" /></label>
@@ -883,9 +1000,16 @@ export default function Home() {
             </fieldset>
 
             {game.responseStage === "resolved" && (
-              <div className="resolved-box" role="status"><span className="resolved-mark">✓</span><div><span className="eyebrow" ref={responseStep} tabIndex={-1}>Recorded</span><strong>{game.resolution}</strong></div></div>
+              <div className="resolved-box"><span className="resolved-mark">✓</span><div><span className="eyebrow" ref={responseStep} tabIndex={-1}>Recorded</span><strong>{game.resolution}</strong></div></div>
             )}
           </article>
+
+          <section className="mobile-turn-summary" aria-label="Turn status and shortcuts">
+            <span><small>Your life</small><strong>{game.userLife}</strong></span>
+            <span><small>Active threat</small><strong>{game.activeThreat ? `${game.activeThreat.remaining} ${game.activeThreat.remaining === 1 ? "turn" : "turns"}` : "Clear"}</strong></span>
+            <button type="button" onClick={openCombat} disabled={!livingOpponents.length} aria-label="Assign your combat damage">Assign combat <span aria-hidden="true">→</span></button>
+            <button type="button" onClick={openSettings}>Table setup</button>
+          </section>
 
           <div className="next-action">
             <div><span className="eyebrow">Up next</span><strong>{game.responseStage === "resolved" ? "Advance one full table round." : "Resolve this event, then advance the table."}</strong></div>
@@ -916,7 +1040,7 @@ export default function Home() {
           </div>
           <article className="you-card">
             <span className="avatar avatar-you">You</span>
-            <div className="opponent-copy"><strong>Your board</strong><small>Highest commander damage: {maxUserCommanderDamage}</small><CommanderLedger damage={game.userCommanderDamage} labels={opponentCommanderLabels} dark /></div>
+            <div className="opponent-copy"><strong>Your board</strong><small>Highest <GlossaryTerm term="Commander damage">commander damage</GlossaryTerm>: {maxUserCommanderDamage}</small><CommanderLedger damage={game.userCommanderDamage} labels={opponentCommanderLabels} dark /></div>
             <div className="life-control life-control-dark">
               <button type="button" onClick={() => adjustLife("user", -1)} aria-label="Remove one life from you">−</button>
               <span className="life" aria-live="polite"><b>{game.userLife}</b><small>life</small></span>
@@ -936,7 +1060,7 @@ export default function Home() {
             {game.activeThreat ? (
               <article className="threat-card">
                 <span className="threat-icon" aria-hidden="true">!</span>
-                <div><strong>{game.activeThreat.title}</strong><p>{game.activeThreat.description}</p></div>
+                <div><strong><GlossaryText text={game.activeThreat.title} /></strong><p><GlossaryText text={game.activeThreat.description} /></p></div>
                 <div className="threat-actions">
                   <button className="text-button light" type="button" onClick={stopThreat} ref={threatAnswerButton}>I answered this threat</button>
                   <button className="text-button light" type="button" onClick={delayThreat} disabled={game.activeThreat.delayed}>{game.activeThreat.delayed ? "Already delayed" : "Delay +1 turn"}</button>
@@ -983,7 +1107,7 @@ export default function Home() {
                     <label>Deck profile<select value={opponent.profile} aria-describedby={profileDescriptionId} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, profile: event.target.value as ProfileId } : item))}>{Object.entries(PROFILE_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
                     <label>Commander bracket<select value={bracket} aria-describedby={bracketDescriptionId} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, bracket: Number(event.target.value) as CommanderBracket } : item))}>{Object.entries(COMMANDER_BRACKETS).map(([value, rules]) => <option value={value} key={value}>B{value} {rules.label}</option>)}</select></label>
                     <button className="remove-button" type="button" onClick={() => removeSettingsOpponent(opponent.id, index)} disabled={settingsOpponents.length === 1} aria-label={`Remove ${opponent.name}`}>Remove</button>
-                    <div className="profile-setting-copy" id={profileDescriptionId}><p>{profile.description}</p><p><strong>Included cards:</strong> {profile.guaranteedCards.map((card, cardIndex) => <span key={card.name}>{cardIndex > 0 && " · "}<CardPreview name={card.name} /></span>)} <span>(in the simulated deck; not guaranteed drawn)</span></p></div>
+                    <div className="profile-setting-copy" id={profileDescriptionId}><p><GlossaryText text={profile.description} /></p><p><strong>Included cards:</strong> {profile.guaranteedCards.map((card, cardIndex) => <span key={card.name}>{cardIndex > 0 && " · "}<CardPreview name={card.name} /></span>)} <span>(in the simulated deck; not guaranteed drawn)</span></p></div>
                     <p className="bracket-setting-copy" id={bracketDescriptionId}><strong>{bracketLabel(bracket)}:</strong> {bracketRules.summary} {bracketRules.turnGuide}</p>
                   </fieldset>
                 );
@@ -1010,7 +1134,7 @@ export default function Home() {
               <label>Power<input type="number" min="0" value={attackerPower} onChange={(event) => setAttackerPower(Math.max(0, Number(event.target.value)))} /></label>
               <label className="check-label"><input type="checkbox" checked={attackerCommander} onChange={(event) => setAttackerCommander(event.target.checked)} />Commander</label>
               {attackerCommander && <label>Commander identity<select value={attackerCommanderSlot} onChange={(event) => setAttackerCommanderSlot(event.target.value as CommanderSlot)}><option value="primary">Primary commander</option><option value="partner">Partner commander</option></select></label>}
-              <fieldset className="keyword-picker event-fieldset"><legend className="sr-only">Attacker keywords</legend>{COMBAT_KEYWORDS.map((keyword) => <label key={keyword}><input type="checkbox" checked={attackerKeywords.includes(keyword)} onChange={() => setAttackerKeywords((current) => current.includes(keyword) ? current.filter((item) => item !== keyword) : [...current, keyword])} />{keyword}</label>)}</fieldset>
+              <fieldset className="keyword-picker event-fieldset"><legend className="sr-only">Attacker keywords</legend><GlossaryHelp label="Keyword help" terms={COMBAT_KEYWORDS} />{COMBAT_KEYWORDS.map((keyword) => <label key={keyword}><input type="checkbox" checked={attackerKeywords.includes(keyword)} onChange={() => setAttackerKeywords((current) => current.includes(keyword) ? current.filter((item) => item !== keyword) : [...current, keyword])} />{keyword}</label>)}</fieldset>
               <button className="secondary-button add-attacker-button" type="submit">Add attacker</button>
             </form>
 
@@ -1023,15 +1147,15 @@ export default function Home() {
             <button className="roll-button" type="button" onClick={simulateDefense} disabled={!outgoingAttackers.length || !combatTarget}>{defense ? "Reroll and replace current defense" : "Roll defending player’s response"} <span>↻</span></button>
 
             {defense && (
-              <div className={`defense-result defense-${defense.type}`} role="status" ref={defenseResult} tabIndex={-1}>
-                <span className="eyebrow">Defense outcome</span><h3>{defense.title}</h3><p>{defense.detail}</p>
+              <div className={`defense-result defense-${defense.type}`} ref={defenseResult} tabIndex={-1}>
+                <span className="eyebrow">Defense outcome</span><h3><GlossaryText text={defense.title} /></h3><p><GlossaryText text={defense.detail} /></p>
                 {defense.type !== "none" && <button className="text-button" type="button" onClick={answerDefense}>I can answer this defense</button>}
               </div>
             )}
 
             {defense && (
               <form className="damage-confirm" id="outgoing-damage-form" key={`${game.defenseCounter}-${defense.type}`} onSubmit={applyOutgoingDamage}>
-                <span className="eyebrow">Damage that gets through</span>
+                <div className="response-heading"><span className="eyebrow">Damage that gets through</span>{outgoingDamageTerms.length > 0 && <GlossaryHelp terms={outgoingDamageTerms} />}</div>
                 <p>Override these values after resolving blocks, removal, or prevention in your playtester.</p>
                 <div className="damage-inputs">
                   <label>Noncommander damage<input name="outgoing-regular" type="number" min="0" max={outgoingDamageLimit.regular} defaultValue={outgoingDamageLimit.regular} /></label>
@@ -1047,8 +1171,8 @@ export default function Home() {
 
       {activeModal === "library" && (
         <Modal title="Curated scenario library" subtitle="Versioned, emblematic examples flavor the simulation; generic rules-aware outcomes keep working even when the catalog is stale." onClose={() => setActiveModal(null)} wide>
-          <div className="library-grid">{CARD_LIBRARY.map((group) => <article key={group.archetype}><span className="eyebrow">Archetype</span><h3>{group.archetype}</h3><ul>{group.cards.map((card) => <li key={card}><CardPreview name={card} /></li>)}</ul></article>)}</div>
-          <div className="library-note"><strong>Library updated {CARD_LIBRARY_UPDATED}</strong><p>Scenario language follows Wizards’ definitions for counter, destroy, exile, flying, reach, trample, menace, deathtouch, first strike, double strike, hexproof, and indestructible.</p><a href="https://magic.wizards.com/en/keyword-glossary" target="_blank" rel="noreferrer">Open the official keyword glossary ↗</a></div>
+          <div className="library-grid">{CARD_LIBRARY.map((group) => <article key={group.archetype}><span className="eyebrow">Archetype</span><h3><GlossaryText text={group.archetype} /></h3><ul>{group.cards.map((card) => <li key={card}><CardPreview name={card} /></li>)}</ul></article>)}</div>
+          <div className="library-note"><strong>Library updated {CARD_LIBRARY_UPDATED}</strong><p>Scenario language follows Wizards’ definitions for <GlossaryTerm term="Counter">counter</GlossaryTerm>, <GlossaryTerm term="Destroy">destroy</GlossaryTerm>, <GlossaryTerm term="Exile">exile</GlossaryTerm>, <GlossaryTerm term="Flying">flying</GlossaryTerm>, <GlossaryTerm term="Reach">reach</GlossaryTerm>, <GlossaryTerm term="Trample">trample</GlossaryTerm>, <GlossaryTerm term="Menace">menace</GlossaryTerm>, <GlossaryTerm term="Deathtouch">deathtouch</GlossaryTerm>, <GlossaryTerm term="First strike">first strike</GlossaryTerm>, <GlossaryTerm term="Double strike">double strike</GlossaryTerm>, <GlossaryTerm term="Hexproof">hexproof</GlossaryTerm>, and <GlossaryTerm term="Indestructible">indestructible</GlossaryTerm>.</p><a href="https://magic.wizards.com/en/keyword-glossary" target="_blank" rel="noreferrer">Open the official keyword glossary ↗</a></div>
         </Modal>
       )}
 

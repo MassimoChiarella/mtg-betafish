@@ -8,8 +8,10 @@ import {
   EVENT_TEMPLATES,
   eventKindWeights,
   generateEvent,
+  GLOSSARY_DEFINITIONS,
   incomingCommanderDamage,
   incomingDamage,
+  KEYWORD_DEFINITIONS,
   normalizeCommanderBracket,
   rollDefense,
   userCommanderKey,
@@ -19,6 +21,12 @@ const opponents = [
   { id: "one", name: "One", profile: "combo", bracket: 4, life: 40, commanderDamage: {}, eliminated: false },
   { id: "two", name: "Two", profile: "swarm", bracket: 2, life: 40, commanderDamage: {}, eliminated: false },
 ];
+
+test("glossary covers combat keywords and app terms", () => {
+  for (const keyword of Object.keys(KEYWORD_DEFINITIONS)) assert.equal(typeof GLOSSARY_DEFINITIONS[keyword], "string");
+  assert.match(GLOSSARY_DEFINITIONS["Commander damage"], /21 or more combat damage/);
+  assert.match(GLOSSARY_DEFINITIONS.Destroy, /Indestructible/);
+});
 
 test("seeded events and defenses are repeatable", () => {
   const input = { turn: 8, counter: 4, seed: "REPLAY-42", opponents, recentTemplateIds: [], activeThreat: false };
