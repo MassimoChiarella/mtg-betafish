@@ -78,6 +78,17 @@ test("resolved table settings allow follow-ups while preserving the combat lock"
   assert.match(hydration, /combatResolvedTurn: parsed\.version === 4 && savedCombatResolvedTurn !== undefined \? savedCombatResolvedTurn : migratedCombatResolvedTurn/);
 });
 
+test("table settings expose the selected profile and bracket core", () => {
+  const settings = sourceSection(pageSource, '<Modal title="Set up the table"', '{activeModal === "combat"');
+
+  assert.match(settings, /const coreCards = profile\.coreCards\[bracket\]/);
+  assert.match(settings, /<strong>B\{bracket\} core cards:<\/strong> \{coreCards\.map/);
+  assert.match(settings, /GAME_CHANGER_CARDS\.has\(card\)/);
+  assert.match(settings, /possible matchup sightings; not a complete decklist or guaranteed draw/);
+  assert.match(settings, /bracket: Number\(event\.target\.value\) as CommanderBracket/);
+  assert.doesNotMatch(settings, /guaranteedCards/);
+});
+
 test("accessible client contracts use one game-over announcement and native combat semantics", () => {
   assert.equal(pageSource.match(/role="alert"/g)?.length ?? 0, 0);
   assert.match(pageSource, /aria-live="polite" aria-atomic="true">\{game\.gameOver \? "" : liveMessage\}/);

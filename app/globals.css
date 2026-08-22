@@ -253,6 +253,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .profile-setting-copy p { margin: 6px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .profile-setting-copy strong, .bracket-setting-copy strong { color: var(--ink); }
 .profile-setting-copy > p > span { color: inherit; }
+.game-changer-label { color: var(--orange-dark); font-size: inherit; font-weight: 800; white-space: nowrap; }
 .bracket-setting-copy { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .remove-button { min-height: 42px; padding: 0 8px; border: 0; background: transparent; color: var(--orange-dark); font-size: 10px; font-weight: 800; text-decoration: underline; }
 .remove-button:disabled { opacity: .3; cursor: not-allowed; }

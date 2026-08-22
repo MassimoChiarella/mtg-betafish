@@ -15,7 +15,7 @@ Open the printed local URL, keep your deck playtester beside it, and resolve eac
 
 ## What it tracks
 
-- one to three opponent deck profiles with visible included-card packages
+- one to three opponent deck profiles with visible, bracket-specific core-card packages
 - per-opponent Commander brackets that scale pacing, interaction, and threat clocks
 - rules-aware incoming attacks with combat keywords
 - responses, counter-to-counter exchanges, and no-legal-target outcomes
@@ -28,7 +28,7 @@ The app intentionally does not reproduce the battlefield or replace a Magic rule
 
 ## Scenario catalog
 
-The versioned catalog, deck profiles, Commander bracket heuristics, and event templates live in `app/simulator.ts`. Update `CARD_LIBRARY`, `DECK_PROFILES`, templates, and the displayed catalog date together when refreshing emblematic cards or archetypes. Keyword explanations follow Wizards’ official glossary.
+The versioned catalog, bracket-specific deck cores, Commander bracket heuristics, and event templates live in `app/simulator.ts`. Update `CARD_LIBRARY`, `DECK_PROFILES`, templates, and the displayed catalog date together when refreshing emblematic cards or archetypes. Core cards can surface as deck-intel encounters without pretending the opponent cast them. Keyword explanations follow Wizards’ official glossary.
 
 Bracket names and turn guidance follow Wizards’ current beta system. The app’s exact counter, removal, combat, and defense probabilities are simulation heuristics rather than official rules. Profiles are abstract matchup presets, not full color-identity-validated 100-card decklists.
 

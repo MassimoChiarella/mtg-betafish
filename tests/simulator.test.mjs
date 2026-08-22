@@ -7,6 +7,7 @@ import {
   DECK_PROFILES,
   EVENT_TEMPLATES,
   eventKindWeights,
+  GAME_CHANGER_CARDS,
   generateEvent,
   GLOSSARY_DEFINITIONS,
   incomingCommanderDamage,
@@ -82,18 +83,55 @@ test("event generation honors the same-turn combat lock", () => {
   assert.notEqual(generateEvent({ ...input, combatResolvedTurn: 10 }).kind, "attack");
 });
 
-test("deck profiles expose valid, bracket-safe included cards", () => {
-  const templates = new Map(EVENT_TEMPLATES.map((template) => [template.id, template]));
+test("deck profiles expose distinct, bracket-safe three-card cores", () => {
+  const templateIds = new Set(EVENT_TEMPLATES.map((template) => template.id));
   assert.deepEqual(
     EVENT_TEMPLATES.filter((template) => template.gameChanger).map(({ id, card }) => [id, card]),
     [["mass-bounce", "Cyclonic Rift"], ["exile-wipe", "Farewell"], ["combo-clock", "Thassa’s Oracle line"]],
   );
-  for (const profile of Object.values(DECK_PROFILES)) {
-    assert.equal(profile.guaranteedCards.length, 3);
-    assert.equal(new Set(profile.guaranteedCards.map((card) => card.name)).size, 3);
-    for (const card of profile.guaranteedCards) {
-      assert.equal(templates.get(card.templateId)?.card, card.name);
-      assert.equal(Boolean(templates.get(card.templateId)?.gameChanger), false);
+  assert.ok(GAME_CHANGER_CARDS.has("Biorhythm"));
+  assert.equal(GAME_CHANGER_CARDS.has("Food Chain"), false);
+
+  for (const [profileId, profile] of Object.entries(DECK_PROFILES)) {
+    assert.deepEqual(Object.keys(profile.coreCards), ["1", "2", "3", "4", "5"]);
+    assert.ok(profile.preferredTemplates.every((templateId) => templateIds.has(templateId)));
+
+    const packageSignatures = new Set();
+    const profileCards = [];
+    for (const bracket of [1, 2, 3, 4, 5]) {
+      const cards = profile.coreCards[bracket];
+      assert.equal(cards.length, 3, `${profileId} B${bracket} should expose three core cards`);
+      assert.equal(new Set(cards).size, 3, `${profileId} B${bracket} core cards should be unique`);
+      assert.ok(bracket >= 3 || cards.every((card) => !GAME_CHANGER_CARDS.has(card)), `${profileId} B${bracket} cannot include a Game Changer`);
+      assert.ok(bracket !== 3 || cards.filter((card) => GAME_CHANGER_CARDS.has(card)).length <= 3);
+      packageSignatures.add([...cards].sort().join("|"));
+      profileCards.push(...cards);
+    }
+    assert.equal(packageSignatures.size, 5, `${profileId} should change its core at every bracket`);
+    assert.equal(new Set(profileCards).size, 15, `${profileId} should not recycle cards between brackets`);
+  }
+});
+
+test("every bracket-specific core card can surface as matchup intel", () => {
+  for (const [profileId, profile] of Object.entries(DECK_PROFILES)) {
+    for (const bracket of [1, 2, 3, 4, 5]) {
+      const unseen = new Set(profile.coreCards[bracket]);
+      for (let counter = 0; counter < 5_000 && unseen.size; counter += 1) {
+        const event = generateEvent({
+          turn: 20,
+          counter,
+          seed: `CORE-${profileId}-${bracket}`,
+          opponents: [{ id: "core", name: "Core", profile: profileId, bracket, life: 40, commanderDamage: {}, eliminated: false }],
+          recentTemplateIds: [],
+          activeThreat: false,
+          combatResolvedTurn: 20,
+        });
+        if (event.kind === "development") {
+          unseen.delete(event.card);
+          assert.match(event.prompt, /not being cast by this event/i);
+        }
+      }
+      assert.deepEqual([...unseen], [], `${profileId} B${bracket} has unreachable core cards`);
     }
   }
 });
@@ -148,11 +186,12 @@ test("generated counter and removal pressure rises through every bracket and pro
 });
 
 test("lower brackets never surface Game Changer scenarios", () => {
-  const gameChangers = new Set(EVENT_TEMPLATES.filter((template) => template.gameChanger).map((template) => template.card));
+  const gameChangerTemplates = new Set(EVENT_TEMPLATES.filter((template) => template.gameChanger).map((template) => template.id));
   for (const bracket of [1, 2]) {
     for (let index = 0; index < 300; index += 1) {
       const event = generateEvent({ turn: 12, counter: index, seed: `LEGAL-${bracket}-${index}`, opponents: [{ ...opponents[0], bracket }], recentTemplateIds: [], activeThreat: false });
-      assert.equal(gameChangers.has(event.card), false);
+      assert.equal(gameChangerTemplates.has(event.templateId), false);
+      assert.equal(GAME_CHANGER_CARDS.has(event.card), false);
     }
   }
 });

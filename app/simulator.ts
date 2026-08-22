@@ -131,12 +131,11 @@ export function normalizeCommanderBracket(value: unknown): CommanderBracket {
   return value === 1 || value === 2 || value === 3 || value === 4 || value === 5 ? value : 3;
 }
 
-type ProfileCard = { name: string; templateId: string };
-
 export const DECK_PROFILES: Record<ProfileId, {
   label: string;
   description: string;
-  guaranteedCards: readonly ProfileCard[];
+  coreCards: Record<CommanderBracket, readonly string[]>;
+  preferredTemplates: readonly string[];
   combat: number;
   counterBack: number;
   /** Relative event-selection weights. */
@@ -144,17 +143,96 @@ export const DECK_PROFILES: Record<ProfileId, {
   /** Base defense weights ordered as none, block, removal, and fog. */
   defense: [number, number, number, number];
 }> = {
-  midrange: { label: "Generic midrange", description: "Flexible value creatures, broad removal, and resilient combat pressure.", guaranteedCards: [{ name: "Beast Within", templateId: "destroy-creature" }, { name: "Wrath of God", templateId: "destroy-wipe" }, { name: "Disrupt Decorum", templateId: "goad" }], combat: 1, counterBack: .12, events: { targeted: 32, wipe: 18, counter: 10, disruption: 25, threat: 15 }, defense: [30, 42, 20, 8] },
-  control: { label: "Control", description: "Permission, efficient removal, and sweepers that punish overextension.", guaranteedCards: [{ name: "Swords to Plowshares", templateId: "exile-commander" }, { name: "Counterspell", templateId: "counter-key-spell" }, { name: "Wrath of God", templateId: "destroy-wipe" }], combat: .65, counterBack: .35, events: { targeted: 30, wipe: 24, counter: 28, disruption: 10, threat: 8 }, defense: [18, 22, 35, 25] },
-  swarm: { label: "Creature swarm", description: "Wide boards, go-wide combat, and an overrun-style closing turn.", guaranteedCards: [{ name: "Nature’s Claim", templateId: "early-rock" }, { name: "Vandalblast", templateId: "artifact-sweep" }, { name: "Craterhoof Behemoth", templateId: "combat-clock" }], combat: 1.3, counterBack: .05, events: { targeted: 30, wipe: 8, counter: 2, disruption: 45, threat: 15 }, defense: [35, 50, 10, 5] },
-  voltron: { label: "Voltron", description: "One oversized attacker protected by lean interaction and tempo plays.", guaranteedCards: [{ name: "Swords to Plowshares", templateId: "exile-commander" }, { name: "Anguished Unmaking", templateId: "remove-engine" }, { name: "Disrupt Decorum", templateId: "goad" }], combat: 1.1, counterBack: .1, events: { targeted: 38, wipe: 8, counter: 7, disruption: 27, threat: 20 }, defense: [42, 25, 23, 10] },
-  combo: { label: "Combo", description: "A compact win package protected by stack interaction and bounce.", guaranteedCards: [{ name: "Counterspell", templateId: "counter-key-spell" }, { name: "Aetherflux Reservoir", templateId: "artifact-clock" }, { name: "Anguished Unmaking", templateId: "remove-engine" }], combat: .55, counterBack: .25, events: { targeted: 18, wipe: 10, counter: 25, disruption: 14, threat: 33 }, defense: [35, 18, 27, 20] },
-  graveyard: { label: "Graveyard value", description: "Recursive threats, death triggers, and mass reanimation pressure.", guaranteedCards: [{ name: "Living Death", templateId: "living-death" }, { name: "Bojuka Bog", templateId: "graveyard-hate" }, { name: "Beast Within", templateId: "destroy-creature" }], combat: .95, counterBack: .08, events: { targeted: 24, wipe: 13, counter: 5, disruption: 36, threat: 22 }, defense: [28, 45, 22, 5] },
+  midrange: {
+    label: "Generic midrange",
+    description: "Flexible value creatures, broad removal, and resilient combat pressure.",
+    coreCards: {
+      1: ["Scavenging Ooze", "Acidic Slime", "Biogenic Ooze"],
+      2: ["Beast Within", "Eternal Witness", "Sun Titan"],
+      3: ["Seedborn Muse", "Aura Shards", "Toski, Bearer of Secrets"],
+      4: ["Ancient Tomb", "The One Ring", "Dauthi Voidwalker"],
+      5: ["Tymna the Weaver", "Kraum, Ludevic’s Opus", "Orcish Bowmasters"],
+    },
+    preferredTemplates: ["destroy-creature", "destroy-wipe", "goad"],
+    combat: 1, counterBack: .12, events: { targeted: 32, wipe: 18, counter: 10, disruption: 25, threat: 15 }, defense: [30, 42, 20, 8],
+  },
+  control: {
+    label: "Control",
+    description: "Permission, efficient removal, and sweepers that punish overextension.",
+    coreCards: {
+      1: ["Dismiss", "Rewind", "Aetherize"],
+      2: ["Arcane Denial", "Generous Gift", "Austere Command"],
+      3: ["Counterspell", "Swords to Plowshares", "Farewell"],
+      4: ["Fierce Guardianship", "Cyclonic Rift", "The One Ring"],
+      5: ["Niv-Mizzet, Parun", "Curiosity", "Force of Will"],
+    },
+    preferredTemplates: ["exile-commander", "counter-key-spell", "destroy-wipe"],
+    combat: .65, counterBack: .35, events: { targeted: 30, wipe: 24, counter: 28, disruption: 10, threat: 8 }, defense: [18, 22, 35, 25],
+  },
+  swarm: {
+    label: "Creature swarm",
+    description: "Wide boards, go-wide combat, and an overrun-style closing turn.",
+    coreCards: {
+      1: ["Chatterstorm", "Squirrel Nest", "Deranged Hermit"],
+      2: ["Secure the Wastes", "Beastmaster Ascension", "Camaraderie"],
+      3: ["Adeline, Resplendent Cathar", "Skullclamp", "Biorhythm"],
+      4: ["Gaea’s Cradle", "Natural Order", "Craterhoof Behemoth"],
+      5: ["Najeela, the Blade-Blossom", "Derevi, Empyrial Tactician", "Nature’s Will"],
+    },
+    preferredTemplates: ["early-rock", "artifact-sweep", "combat-clock"],
+    combat: 1.3, counterBack: .05, events: { targeted: 30, wipe: 8, counter: 2, disruption: 45, threat: 15 }, defense: [35, 50, 10, 5],
+  },
+  voltron: {
+    label: "Voltron",
+    description: "One oversized attacker protected by lean interaction and tempo plays.",
+    coreCards: {
+      1: ["Hero’s Blade", "Blackblade Reforged", "Forebear’s Blade"],
+      2: ["Sword of the Animist", "All That Glitters", "Tamiyo’s Safekeeping"],
+      3: ["Puresteel Paladin", "Sword of Feast and Famine", "Flawless Maneuver"],
+      4: ["Sigarda’s Aid", "Colossus Hammer", "Enlightened Tutor"],
+      5: ["Godo, Bandit Warlord", "Helm of the Host", "Mana Vault"],
+    },
+    preferredTemplates: ["exile-commander", "remove-engine", "goad"],
+    combat: 1.1, counterBack: .1, events: { targeted: 38, wipe: 8, counter: 7, disruption: 27, threat: 20 }, defense: [42, 25, 23, 10],
+  },
+  combo: {
+    label: "Combo",
+    description: "A compact win package protected by stack interaction and bounce.",
+    coreCards: {
+      1: ["Efficient Construction", "Thopter Spy Network", "Mechanized Production"],
+      2: ["Primal Amulet", "Storm-Kiln Artist", "Crackle with Power"],
+      3: ["Bolas’s Citadel", "Sensei’s Divining Top", "Aetherflux Reservoir"],
+      4: ["Food Chain", "Misthollow Griffin", "Walking Ballista"],
+      5: ["Thassa’s Oracle", "Demonic Consultation", "Pact of Negation"],
+    },
+    preferredTemplates: ["counter-key-spell", "artifact-clock", "remove-engine"],
+    combat: .55, counterBack: .25, events: { targeted: 18, wipe: 10, counter: 25, disruption: 14, threat: 33 }, defense: [35, 18, 27, 20],
+  },
+  graveyard: {
+    label: "Graveyard value",
+    description: "Recursive threats, death triggers, and mass reanimation pressure.",
+    coreCards: {
+      1: ["Undead Butler", "Gravedigger", "Zombie Apocalypse"],
+      2: ["Satyr Wayfinder", "Victimize", "Kessig Cagebreakers"],
+      3: ["Life from the Loam", "Mesmeric Orb", "Living Death"],
+      4: ["Entomb", "Reanimate", "Vilis, Broker of Blood"],
+      5: ["Underworld Breach", "Lion’s Eye Diamond", "Brain Freeze"],
+    },
+    preferredTemplates: ["living-death", "graveyard-hate", "destroy-creature"],
+    combat: .95, counterBack: .08, events: { targeted: 24, wipe: 13, counter: 5, disruption: 36, threat: 22 }, defense: [28, 45, 22, 5],
+  },
 };
+
+/** Current Game Changers used by the bracket-specific core packages. */
+export const GAME_CHANGER_CARDS: ReadonlySet<string> = new Set([
+  "Ancient Tomb", "Aura Shards", "Biorhythm", "Bolas’s Citadel", "Cyclonic Rift", "Enlightened Tutor",
+  "Farewell", "Fierce Guardianship", "Force of Will", "Gaea’s Cradle", "Lion’s Eye Diamond", "Mana Vault",
+  "Natural Order", "Orcish Bowmasters", "Seedborn Muse", "The One Ring", "Thassa’s Oracle", "Underworld Breach",
+]);
 
 export const PROFILE_LABELS = Object.fromEntries(Object.entries(DECK_PROFILES).map(([id, profile]) => [id, profile.label])) as Record<ProfileId, string>;
 
-export const CARD_LIBRARY_UPDATED = "August 18, 2026";
+export const CARD_LIBRARY_UPDATED = "August 22, 2026";
 
 export const CARD_LIBRARY = [
   { archetype: "Spot removal", cards: ["Swords to Plowshares", "Path to Exile", "Beast Within", "Anguished Unmaking"] },
@@ -328,6 +406,7 @@ export function generateEvent(input: {
   const profile = DECK_PROFILES[source.profile];
   const bracket = normalizeCommanderBracket(source.bracket);
   const bracketRules = COMMANDER_BRACKETS[bracket];
+  const coreCards = profile.coreCards[bracket];
   const effectiveTurn = Math.max(1, turn + bracketRules.turnOffset);
   const eventId = `event-${turn}-${counter}`;
 
@@ -352,23 +431,24 @@ export function generateEvent(input: {
   }
 
   if (kind === "development") {
+    const coreCard = coreCards[intBetween(random, 0, coreCards.length - 1)];
     return {
       id: eventId,
       templateId: "table-development",
       kind,
       sourceId: source.id,
       sourceName: source.name,
-      title: `${source.name} develops their game plan.`,
-      prompt: "No spell or attacker is aimed at you by this action. Use the breathing room to advance your own plan.",
-      card: `${PROFILE_LABELS[source.profile]} setup`,
-      tags: ["Development", `B${bracket} ${bracketRules.label}`],
+      title: `${source.name} reveals a signature card.`,
+      prompt: `${coreCard} is a matchup-defining inclusion for this profile and bracket. It is not being cast by this event; use the breathing room to advance your own plan.`,
+      card: coreCard,
+      tags: ["Deck intel", "Core card", `B${bracket} ${bracketRules.label}`],
     };
   }
 
   let candidates = EVENT_TEMPLATES.filter((template) => template.kind === kind && isEligible(template) && !recentTemplateIds.includes(template.id));
   if (!candidates.length) candidates = EVENT_TEMPLATES.filter((template) => template.kind === kind && isEligible(template));
-  const guaranteedCandidates = candidates.filter((template) => profile.guaranteedCards.some((card) => card.templateId === template.id));
-  if (guaranteedCandidates.length) candidates = guaranteedCandidates;
+  const preferredCandidates = candidates.filter((template) => profile.preferredTemplates.includes(template.id));
+  if (preferredCandidates.length) candidates = preferredCandidates;
   const template = candidates[intBetween(random, 0, candidates.length - 1)];
 
   return {

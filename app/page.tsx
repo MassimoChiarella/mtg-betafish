@@ -8,6 +8,7 @@ import {
   COMMANDER_BRACKETS,
   counterBacks,
   DECK_PROFILES,
+  GAME_CHANGER_CARDS,
   generateEvent,
   GLOSSARY_DEFINITIONS,
   incomingCommanderDamage,
@@ -885,9 +886,9 @@ export default function Home() {
   const maxUserCommanderDamage = highestCommanderDamage(game.userCommanderDamage);
   const tableDefeated = game.opponents.every((opponent) => opponent.eliminated);
   const userDefeated = game.userLife <= 0 || maxUserCommanderDamage >= 21;
-  const eventCardLookup = game.currentEvent.kind === "attack" || game.currentEvent.kind === "development" || game.currentEvent.templateId === "random-discard"
+  const eventCardLookup = game.currentEvent.kind === "attack" || game.currentEvent.templateId === "random-discard"
     ? null
-    : game.currentEvent.templateId === "combo-clock" ? "Thassa’s Oracle" : game.currentEvent.card;
+    : game.currentEvent.card === "Thassa’s Oracle line" ? "Thassa’s Oracle" : game.currentEvent.card;
   // eslint-disable-next-line react-hooks/refs -- commit, undo, and reset pair each stack mutation with a game-state render
   const canUndo = undoStack.current.length > 0;
   const opponentCommanderLabels = Object.fromEntries(game.opponents.map((opponent) => [opponentCommanderKey(opponent.id), `${opponent.name}’s commander`]));
@@ -1120,13 +1121,14 @@ export default function Home() {
       </footer>
 
       {activeModal === "settings" && (
-        <Modal title="Set up the table" subtitle="Choose one to three matchup profiles. Each deck package shapes the action mix; its bracket sets pacing and interaction frequency." onClose={() => setActiveModal(null)} wide>
+        <Modal title="Set up the table" subtitle="Choose one to three matchups. Each profile-and-bracket pairing has its own core-card package, pacing, and interaction frequency." onClose={() => setActiveModal(null)} wide>
           <div className="settings-body">
             <div className="opponent-settings" ref={settingsPanel}>
               {settingsOpponents.map((opponent, index) => {
                 const profile = DECK_PROFILES[opponent.profile];
                 const bracket = normalizeCommanderBracket(opponent.bracket);
                 const bracketRules = COMMANDER_BRACKETS[bracket];
+                const coreCards = profile.coreCards[bracket];
                 const profileDescriptionId = `profile-description-${opponent.id}`;
                 const bracketDescriptionId = `bracket-description-${opponent.id}`;
                 return (
@@ -1137,7 +1139,7 @@ export default function Home() {
                     <label>Deck profile<select value={opponent.profile} aria-describedby={profileDescriptionId} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, profile: event.target.value as ProfileId } : item))}>{Object.entries(PROFILE_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
                     <label>Commander bracket<select value={bracket} aria-describedby={bracketDescriptionId} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, bracket: Number(event.target.value) as CommanderBracket } : item))}>{Object.entries(COMMANDER_BRACKETS).map(([value, rules]) => <option value={value} key={value}>B{value} {rules.label}</option>)}</select></label>
                     <button className="remove-button" type="button" onClick={() => removeSettingsOpponent(opponent.id, index)} disabled={settingsOpponents.length === 1} aria-label={`Remove ${opponent.name}`}>Remove</button>
-                    <div className="profile-setting-copy" id={profileDescriptionId}><p><GlossaryText text={profile.description} /></p><p><strong>Included cards:</strong> {profile.guaranteedCards.map((card, cardIndex) => <span key={card.name}>{cardIndex > 0 && " · "}<CardPreview name={card.name} /></span>)} <span>(in the simulated deck; not guaranteed drawn)</span></p></div>
+                    <div className="profile-setting-copy" id={profileDescriptionId}><p><GlossaryText text={profile.description} /></p><p><strong>B{bracket} core cards:</strong> {coreCards.map((card, cardIndex) => <span key={card}>{cardIndex > 0 && " · "}<CardPreview name={card} />{GAME_CHANGER_CARDS.has(card) && <small className="game-changer-label"> Game Changer</small>}</span>)} <span>(possible matchup sightings; not a complete decklist or guaranteed draw)</span></p></div>
                     <p className="bracket-setting-copy" id={bracketDescriptionId}><strong>{bracketLabel(bracket)}:</strong> {bracketRules.summary} {bracketRules.turnGuide}</p>
                   </fieldset>
                 );
