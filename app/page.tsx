@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   applyCombatDamage,
   CARD_LIBRARY,
@@ -27,7 +27,6 @@ import {
   type Threat,
 } from "./simulator";
 
-type EventStatus = "pending" | "resolved";
 type ResponseStage = "prompt" | "choose" | "counterback" | "combat" | "resolved";
 type HistoryTone = "success" | "damage" | "warning" | "neutral";
 
@@ -49,13 +48,11 @@ type GameState = {
   userLife: number;
   userCommanderDamage: Record<string, number>;
   currentEvent: SimEvent;
-  eventStatus: EventStatus;
   responseStage: ResponseStage;
   resolution: string;
   activeThreat: Threat | null;
   recentTemplateIds: string[];
   history: HistoryEntry[];
-  paused: boolean;
   gameOver: string | null;
 };
 
@@ -105,13 +102,11 @@ function createInitialGame(seed = "GILDED-732", opponents = DEFAULT_OPPONENTS): 
     userLife: 40,
     userCommanderDamage: {},
     currentEvent,
-    eventStatus: "pending",
     responseStage: "prompt",
     resolution: "",
     activeThreat: null,
     recentTemplateIds: [],
     history: [{ id: "session-start", turn: 1, title: "Session started", detail: "The simulated table is live.", tone: "neutral" }],
-    paused: false,
     gameOver: null,
   };
 }
@@ -124,26 +119,24 @@ function highestCommanderDamage(damage: Record<string, number>) {
   return Math.max(0, ...Object.values(damage));
 }
 
+function damageFromForm(data: FormData, name: string, maximum: number) {
+  return Math.min(maximum, Math.max(0, Math.floor(Number(data.get(name)) || 0)));
+}
+
 function bracketLabel(value: unknown) {
   const bracket = normalizeCommanderBracket(value);
   return `B${bracket} ${COMMANDER_BRACKETS[bracket].label}`;
 }
 
-function eventKindLabel(event: SimEvent) {
-  return {
-    targeted: "Single-target interaction",
-    wipe: "Board wipe",
-    counter: "Stack interaction",
-    disruption: "Table disruption",
-    attack: "Incoming combat",
-    threat: "Game-ending threat",
-    development: "Table development",
-  }[event.kind];
-}
-
-function eventGlyph(event: SimEvent) {
-  return { targeted: "↗", wipe: "✺", counter: "↯", disruption: "◇", attack: "⚔", threat: "!", development: "…" }[event.kind];
-}
+const EVENT_PRESENTATION = {
+  targeted: { label: "Single-target interaction", glyph: "↗" },
+  wipe: { label: "Board wipe", glyph: "✺" },
+  counter: { label: "Stack interaction", glyph: "↯" },
+  disruption: { label: "Table disruption", glyph: "◇" },
+  attack: { label: "Incoming combat", glyph: "⚔" },
+  threat: { label: "Game-ending threat", glyph: "!" },
+  development: { label: "Table development", glyph: "…" },
+} satisfies Record<SimEvent["kind"], { label: string; glyph: string }>;
 
 function Modal({ title, subtitle, onClose, children, wide = false, dismissible = true }: {
   title: string;
@@ -201,13 +194,12 @@ function CommanderLedger({ damage, labels = {}, dark = false }: { damage: Record
 export default function Home() {
   const [game, setGame] = useState<GameState>(() => createInitialGame());
   const [hydrated, setHydrated] = useState(false);
-  const [canUndo, setCanUndo] = useState(false);
   const undoStack = useRef<GameState[]>([]);
+  const responseStep = useRef<HTMLSpanElement>(null);
+  const previousResponseStage = useRef(game.responseStage);
+  const defenseResult = useRef<HTMLDivElement>(null);
 
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [libraryOpen, setLibraryOpen] = useState(false);
-  const [combatOpen, setCombatOpen] = useState(false);
-  const [resetOpen, setResetOpen] = useState(false);
+  const [activeModal, setActiveModal] = useState<"settings" | "library" | "combat" | "reset" | null>(null);
   const [settingsOpponents, setSettingsOpponents] = useState<Opponent[]>([]);
   const [settingsSeed, setSettingsSeed] = useState("");
 
@@ -219,30 +211,22 @@ export default function Home() {
   const [attackerCommanderSlot, setAttackerCommanderSlot] = useState<CommanderSlot>("primary");
   const [attackerKeywords, setAttackerKeywords] = useState<Keyword[]>([]);
   const [defense, setDefense] = useState<DefenseResult | null>(null);
-  const [regularDamageDraft, setRegularDamageDraft] = useState(0);
-  const [commanderDamageDraft, setCommanderDamageDraft] = useState<Record<string, number>>({});
-  const [outgoingLifelinkDraft, setOutgoingLifelinkDraft] = useState(0);
-  const [incomingRegularDraft, setIncomingRegularDraft] = useState(0);
-  const [incomingCommanderDraft, setIncomingCommanderDraft] = useState(0);
-  const [incomingLifelinkDraft, setIncomingLifelinkDraft] = useState(0);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      try {
-        const saved = window.localStorage.getItem(STORAGE_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved) as Omit<GameState, "version"> & { version: number };
-          if ((parsed.version === 1 || parsed.version === 2) && parsed.currentEvent && Array.isArray(parsed.opponents)) {
-            setGame({ ...parsed, version: 2, opponents: cloneOpponents(parsed.opponents) });
-          }
+    try {
+      const saved = window.localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as Omit<GameState, "version"> & { version: number };
+        if ((parsed.version === 1 || parsed.version === 2) && parsed.currentEvent && Array.isArray(parsed.opponents)) {
+          // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate client-only persisted state after mount
+          setGame({ ...parsed, version: 2, opponents: cloneOpponents(parsed.opponents) });
         }
-      } catch {
-        window.localStorage.removeItem(STORAGE_KEY);
-      } finally {
-        setHydrated(true);
       }
-    });
-    return () => window.cancelAnimationFrame(frame);
+    } catch {
+      window.localStorage.removeItem(STORAGE_KEY);
+    } finally {
+      setHydrated(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -250,11 +234,19 @@ export default function Home() {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(game));
   }, [game, hydrated]);
 
-  const commit = useCallback((update: (previous: GameState) => GameState) => {
+  useEffect(() => {
+    if (previousResponseStage.current !== game.responseStage) responseStep.current?.focus();
+    previousResponseStage.current = game.responseStage;
+  }, [game.responseStage]);
+
+  useEffect(() => {
+    if (activeModal === "combat" && defense) defenseResult.current?.focus();
+  }, [activeModal, defense]);
+
+  function commit(update: (previous: GameState) => GameState) {
     undoStack.current = [...undoStack.current.slice(-9), game];
-    setCanUndo(true);
     setGame(update(game));
-  }, [game]);
+  }
 
   const sourceOpponent = game.opponents.find((opponent) => opponent.id === game.currentEvent.sourceId);
   const incomingTotal = game.currentEvent.attackers ? incomingDamage(game.currentEvent.attackers) : 0;
@@ -263,18 +255,17 @@ export default function Home() {
   const incomingLifelinkTotal = game.currentEvent.attackers?.filter((attacker) => attacker.keywords.includes("Lifelink")).reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0) ?? 0;
   const livingOpponents = game.opponents.filter((opponent) => !opponent.eliminated);
 
-  const resolveEvent = useCallback((title: string, detail: string, tone: HistoryTone, patch: Partial<GameState> = {}) => {
+  function resolveEvent(title: string, detail: string, tone: HistoryTone, patch: Partial<GameState> = {}) {
     commit((previous) => ({
       ...previous,
       ...patch,
-      eventStatus: "resolved",
       responseStage: "resolved",
       resolution: detail,
       history: [historyEntry(previous, title, detail, tone), ...previous.history].slice(0, 40),
     }));
-  }, [commit]);
+  }
 
-  const letEventResolve = useCallback(() => {
+  function letEventResolve() {
     const event = game.currentEvent;
     if (event.kind === "attack") return;
     if (event.kind === "development") {
@@ -286,9 +277,9 @@ export default function Home() {
       return;
     }
     resolveEvent(`${event.card} resolves`, "Apply the generated outcome in your playtester, then advance the table.", event.kind === "wipe" ? "warning" : "damage");
-  }, [game.currentEvent, resolveEvent]);
+  }
 
-  const answerEvent = useCallback((answer: "counter" | "protect" | "redirect" | "custom" | "counter-again") => {
+  function answerEvent(answer: "counter" | "protect" | "redirect" | "custom" | "counter-again") {
     const event = game.currentEvent;
     if ((answer === "counter" || answer === "counter-again") && game.responseStage !== "counterback") {
       const profile = sourceOpponent?.profile ?? "midrange";
@@ -311,9 +302,9 @@ export default function Home() {
       custom: "You supplied a legal answer and stopped the generated action.",
     };
     resolveEvent("Action answered", labels[answer], "success");
-  }, [commit, game, resolveEvent, sourceOpponent?.bracket, sourceOpponent?.profile]);
+  }
 
-  const applyIncoming = useCallback((regularDamage: number, commanderDamage: number, label: string, lifelinkDamage = 0) => {
+  function applyIncoming(regularDamage: number, commanderDamage: number, label: string, lifelinkDamage = 0) {
     const commanderName = game.currentEvent.attackers?.find((attacker) => attacker.isCommander)?.name ?? `${game.currentEvent.sourceName}’s commander`;
     const commanderId = opponentCommanderKey(game.currentEvent.sourceId);
     const result = applyCombatDamage({
@@ -335,9 +326,18 @@ export default function Home() {
       result.totalDamage ? "damage" : "success",
       { userLife: result.life, userCommanderDamage: result.commanderDamage, opponents, gameOver },
     );
-  }, [game, resolveEvent]);
+  }
 
-  const advanceTurn = useCallback(() => {
+  function submitIncomingDamage(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const regularDamage = damageFromForm(data, "incoming-regular", incomingRegularTotal);
+    const commanderDamage = damageFromForm(data, "incoming-commander", incomingCommanderTotal);
+    const lifelinkDamage = damageFromForm(data, "incoming-lifelink", incomingLifelinkTotal);
+    applyIncoming(regularDamage, commanderDamage, "Combat resolved", lifelinkDamage);
+  }
+
+  function advanceTurn() {
     commit((previous) => {
       if (previous.opponents.every((opponent) => opponent.eliminated)) {
         return { ...previous, gameOver: "You eliminated every simulated opponent." };
@@ -373,16 +373,15 @@ export default function Home() {
         turn,
         eventCounter,
         currentEvent,
-        eventStatus: "pending",
         responseStage: "prompt",
         resolution: "",
         activeThreat,
         recentTemplateIds,
       };
     });
-  }, [commit]);
+  }
 
-  const adjustLife = useCallback((target: "user" | string, amount: number) => {
+  function adjustLife(target: "user" | string, amount: number) {
     commit((previous) => {
       if (target === "user") {
         const userLife = previous.userLife + amount;
@@ -396,7 +395,7 @@ export default function Home() {
       });
       const activeThreat = previous.activeThreat?.ownerId === target && opponents.find((opponent) => opponent.id === target)?.eliminated ? null : previous.activeThreat;
       const tableDefeated = opponents.every((opponent) => opponent.eliminated);
-      const sourceEliminated = previous.eventStatus === "pending" && opponents.some((opponent) => opponent.id === previous.currentEvent.sourceId && opponent.eliminated);
+      const sourceEliminated = previous.responseStage !== "resolved" && opponents.some((opponent) => opponent.id === previous.currentEvent.sourceId && opponent.eliminated);
       const sourceResolution = `${previous.currentEvent.sourceName} left the game, so their pending action was removed from the stack or combat.`;
       return {
         ...previous,
@@ -404,40 +403,39 @@ export default function Home() {
         activeThreat,
         gameOver: tableDefeated ? "You eliminated every simulated opponent." : previous.gameOver,
         ...(sourceEliminated ? {
-          eventStatus: "resolved" as const,
           responseStage: "resolved" as const,
           resolution: sourceResolution,
           history: [historyEntry(previous, "Pending action cancelled", sourceResolution, "neutral"), ...previous.history].slice(0, 40),
         } : {}),
       };
     });
-  }, [commit]);
+  }
 
-  const stopThreat = useCallback(() => {
+  function stopThreat() {
     if (!game.activeThreat) return;
     commit((previous) => ({
       ...previous,
       activeThreat: null,
       history: [historyEntry(previous, "Threat answered", `${previous.activeThreat?.title ?? "The active threat"} is no longer threatening the table.`, "success"), ...previous.history].slice(0, 40),
     }));
-  }, [commit, game.activeThreat]);
+  }
 
-  const delayThreat = useCallback(() => {
+  function delayThreat() {
     if (!game.activeThreat || game.activeThreat.delayed) return;
     commit((previous) => ({
       ...previous,
       activeThreat: previous.activeThreat ? { ...previous.activeThreat, remaining: previous.activeThreat.remaining + 1, delayed: true } : null,
       history: [historyEntry(previous, "Threat delayed", "You bought one additional turn.", "success"), ...previous.history].slice(0, 40),
     }));
-  }, [commit, game.activeThreat]);
+  }
 
-  const openSettings = useCallback(() => {
+  function openSettings() {
     setSettingsOpponents(cloneOpponents(game.opponents));
     setSettingsSeed(game.seed);
-    setSettingsOpen(true);
-  }, [game]);
+    setActiveModal("settings");
+  }
 
-  const saveSettings = useCallback(() => {
+  function saveSettings() {
     const opponents = settingsOpponents.map((opponent, index) => ({
       ...opponent,
       name: opponent.name.trim() || `Opponent ${index + 1}`,
@@ -468,17 +466,16 @@ export default function Home() {
         opponents,
         eventCounter,
         currentEvent,
-        eventStatus: "pending",
         responseStage: "prompt",
         resolution: "",
         activeThreat: previous.activeThreat && opponents.some((opponent) => opponent.id === previous.activeThreat?.ownerId) ? previous.activeThreat : null,
         history: [historyEntry(previous, "Table updated", "Opponent deck profiles and Commander brackets changed.", "neutral"), ...previous.history].slice(0, 40),
       };
     });
-    setSettingsOpen(false);
-  }, [commit, settingsOpponents, settingsSeed]);
+    setActiveModal(null);
+  }
 
-  const openCombat = useCallback(() => {
+  function openCombat() {
     const firstTarget = game.opponents.find((opponent) => !opponent.eliminated)?.id ?? game.opponents[0]?.id ?? "";
     setCombatTarget(firstTarget);
     setOutgoingAttackers([]);
@@ -488,13 +485,10 @@ export default function Home() {
     setAttackerCommanderSlot("primary");
     setAttackerKeywords([]);
     setDefense(null);
-    setRegularDamageDraft(0);
-    setCommanderDamageDraft({});
-    setOutgoingLifelinkDraft(0);
-    setCombatOpen(true);
-  }, [game.opponents]);
+    setActiveModal("combat");
+  }
 
-  const addOutgoingAttacker = useCallback(() => {
+  function addOutgoingAttacker() {
     const attacker: OutgoingAttacker = {
       id: `attacker-${Date.now()}-${outgoingAttackers.length}`,
       name: attackerName.trim() || (attackerCommander ? "Your commander" : `Attacker ${outgoingAttackers.length + 1}`),
@@ -509,9 +503,9 @@ export default function Home() {
     setAttackerCommander(false);
     setAttackerKeywords([]);
     setDefense(null);
-  }, [attackerCommander, attackerCommanderSlot, attackerKeywords, attackerName, attackerPower, outgoingAttackers.length]);
+  }
 
-  const fullCombatDamage = useCallback((attackers: OutgoingAttacker[], ignoredId?: string) => {
+  function fullCombatDamage(attackers: OutgoingAttacker[], ignoredId?: string) {
     const regular = attackers.filter((attacker) => !attacker.isCommander && attacker.id !== ignoredId)
       .reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0);
     const commander = Object.fromEntries(attackers.filter((attacker) => attacker.isCommander && attacker.id !== ignoredId)
@@ -519,19 +513,9 @@ export default function Home() {
     const lifelink = attackers.filter((attacker) => attacker.id !== ignoredId && attacker.keywords.includes("Lifelink"))
       .reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0);
     return { regular, commander, lifelink };
-  }, []);
+  }
 
-  const prepareDamage = useCallback((result: DefenseResult) => {
-    let ignoredId: string | undefined;
-    if (result.type === "removal") ignoredId = [...outgoingAttackers].sort((a, b) => b.power - a.power)[0]?.id;
-    const full = fullCombatDamage(outgoingAttackers, ignoredId);
-    const prevented = result.type === "fog";
-    setRegularDamageDraft(prevented ? 0 : full.regular);
-    setCommanderDamageDraft(prevented ? Object.fromEntries(Object.keys(full.commander).map((key) => [key, 0])) : full.commander);
-    setOutgoingLifelinkDraft(prevented ? 0 : full.lifelink);
-  }, [fullCombatDamage, outgoingAttackers]);
-
-  const simulateDefense = useCallback(() => {
+  function simulateDefense() {
     const target = game.opponents.find((opponent) => opponent.id === combatTarget);
     if (!target || !outgoingAttackers.length) return;
     const result = rollDefense({
@@ -543,29 +527,29 @@ export default function Home() {
       attackers: outgoingAttackers,
     });
     setDefense(result);
-    prepareDamage(result);
     setGame((previous) => ({ ...previous, defenseCounter: previous.defenseCounter + 1 }));
-  }, [combatTarget, game, outgoingAttackers, prepareDamage]);
+  }
 
-  const answerDefense = useCallback(() => {
-    const result: DefenseResult = { type: "none", title: "Defense answered", detail: "Your interaction stops the defensive play. Resolve combat normally." };
-    setDefense(result);
-    prepareDamage(result);
-  }, [prepareDamage]);
+  function answerDefense() {
+    setDefense({ type: "none", title: "Defense answered", detail: "Your interaction stops the defensive play. Resolve combat normally." });
+  }
 
-  const applyOutgoingDamage = useCallback(() => {
+  function applyOutgoingDamage(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     const target = game.opponents.find((opponent) => opponent.id === combatTarget);
     if (!target || !defense) return;
+    const data = new FormData(event.currentTarget);
     const removedId = defense.type === "removal" ? [...outgoingAttackers].sort((a, b) => b.power - a.power)[0]?.id : undefined;
     const full = defense.type === "fog" ? { regular: 0, commander: {} as Record<string, number>, lifelink: 0 } : fullCombatDamage(outgoingAttackers, removedId);
     const commanderHits: Record<string, number> = {};
     outgoingAttackers.filter((attacker) => attacker.isCommander).forEach((attacker) => {
-      const damage = Math.min(full.commander[attacker.id] ?? 0, Math.max(0, commanderDamageDraft[attacker.id] ?? 0));
+      const damage = damageFromForm(data, `commander-${attacker.id}`, full.commander[attacker.id] ?? 0);
       const commanderId = userCommanderKey(attacker.commanderSlot ?? "primary");
       commanderHits[commanderId] = (commanderHits[commanderId] ?? 0) + damage;
     });
-    const result = applyCombatDamage({ life: target.life, commanderDamage: target.commanderDamage, regularDamage: Math.min(full.regular, regularDamageDraft), commanderHits });
-    const lifelinkGain = Math.min(full.lifelink, outgoingLifelinkDraft, result.totalDamage);
+    const regularDamage = damageFromForm(data, "outgoing-regular", full.regular);
+    const result = applyCombatDamage({ life: target.life, commanderDamage: target.commanderDamage, regularDamage, commanderHits });
+    const lifelinkGain = Math.min(damageFromForm(data, "outgoing-lifelink", full.lifelink), result.totalDamage);
     commit((previous) => {
       const opponents = previous.opponents.map((opponent) => opponent.id === target.id
         ? { ...opponent, life: result.life, commanderDamage: result.commanderDamage, eliminated: result.defeated }
@@ -573,7 +557,7 @@ export default function Home() {
       const reason = result.lethalCommander ? `${USER_COMMANDER_LABELS[result.lethalCommander] ?? result.lethalCommander} reached 21 commander damage.` : result.life <= 0 ? `${target.name} reached ${result.life} life.` : "";
       const detail = `${result.totalDamage} damage assigned to ${target.name}.${lifelinkGain ? ` You gained ${lifelinkGain} life.` : ""}${reason ? ` ${reason}` : ""}`;
       const tableDefeated = opponents.every((opponent) => opponent.eliminated);
-      const sourceEliminated = result.defeated && previous.eventStatus === "pending" && previous.currentEvent.sourceId === target.id;
+      const sourceEliminated = result.defeated && previous.responseStage !== "resolved" && previous.currentEvent.sourceId === target.id;
       const sourceResolution = `${target.name} left the game, so their pending action was removed from the stack or combat.`;
       const damageHistory = historyEntry(previous, result.defeated ? `${target.name} eliminated` : `Damage assigned to ${target.name}`, detail, result.defeated ? "success" : "damage");
       return {
@@ -583,40 +567,38 @@ export default function Home() {
         activeThreat: result.defeated && previous.activeThreat?.ownerId === target.id ? null : previous.activeThreat,
         gameOver: tableDefeated ? "You eliminated every simulated opponent." : previous.gameOver,
         history: [damageHistory, ...(sourceEliminated ? [historyEntry(previous, "Pending action cancelled", sourceResolution, "neutral")] : []), ...previous.history].slice(0, 40),
-        ...(sourceEliminated ? { eventStatus: "resolved" as const, responseStage: "resolved" as const, resolution: sourceResolution } : {}),
+        ...(sourceEliminated ? { responseStage: "resolved" as const, resolution: sourceResolution } : {}),
       };
     });
-    setCombatOpen(false);
-  }, [combatTarget, commanderDamageDraft, commit, defense, fullCombatDamage, game.opponents, outgoingAttackers, outgoingLifelinkDraft, regularDamageDraft]);
+    setActiveModal(null);
+  }
 
-  const undo = useCallback(() => {
+  function undo() {
     const previous = undoStack.current.pop();
-    if (previous) {
-      setGame(previous);
-      setCanUndo(undoStack.current.length > 0);
-    }
-  }, []);
+    if (previous) setGame(previous);
+  }
 
-  const resetSession = useCallback(() => {
+  function resetSession() {
     const seed = `CAST-${Date.now().toString(36).slice(-6).toUpperCase()}`;
     undoStack.current = [];
-    setCanUndo(false);
     setGame(createInitialGame(seed, game.opponents.map((opponent) => ({ ...opponent, life: 40, commanderDamage: {}, eliminated: false }))));
-    setResetOpen(false);
-  }, [game.opponents]);
+    setActiveModal(null);
+  }
 
   const maxUserCommanderDamage = highestCommanderDamage(game.userCommanderDamage);
   const tableDefeated = game.opponents.every((opponent) => opponent.eliminated);
   const userDefeated = game.userLife <= 0 || maxUserCommanderDamage >= 21;
+  // eslint-disable-next-line react-hooks/refs -- every stack mutation also updates game state
+  const canUndo = undoStack.current.length > 0;
   const opponentCommanderLabels = Object.fromEntries(game.opponents.map((opponent) => [opponentCommanderKey(opponent.id), `${opponent.name}’s commander`]));
   const removedAttackerId = defense?.type === "removal" ? [...outgoingAttackers].sort((a, b) => b.power - a.power)[0]?.id : undefined;
   const outgoingDamageLimit = defense?.type === "fog" ? { regular: 0, commander: {} as Record<string, number>, lifelink: 0 } : fullCombatDamage(outgoingAttackers, removedAttackerId);
   const liveMessage = game.gameOver
-    ?? (combatOpen && defense ? `Defense roll: ${defense.title}. ${defense.detail}` : null)
+    ?? (activeModal === "combat" && defense ? `Defense roll: ${defense.title}. ${defense.detail}` : null)
     ?? (game.responseStage === "counterback" ? "Your counter was countered. Choose whether to answer again or let the original action resolve." : null)
     ?? (game.responseStage === "choose" ? "Response choices are ready: counter, protect, redirect, or use another answer." : null)
     ?? (game.responseStage === "combat" ? "Combat damage fields are ready. Enter the regular and commander damage that reached you." : null)
-    ?? (game.eventStatus === "pending" ? `${eventKindLabel(game.currentEvent)}: ${game.currentEvent.title}` : game.resolution);
+    ?? (game.responseStage !== "resolved" ? `${EVENT_PRESENTATION[game.currentEvent.kind].label}: ${game.currentEvent.title}` : game.resolution);
   return (
     <main className="app-shell">
       <div className="sr-only" aria-live="polite" aria-atomic="true">{liveMessage}</div>
@@ -624,18 +606,13 @@ export default function Home() {
 
       <header className="topbar">
         <a className="brand" href="#main-workspace" aria-label="Goldfish Lab home">
-          <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
           <span><strong>Goldfish</strong><small>Lab</small></span>
         </a>
         <div className="turn-strip" aria-label={`Turn ${game.turn}`}>
           <span className="eyebrow">Turn {game.turn}</span>
-          <b>{game.paused ? "Session paused" : game.eventStatus === "pending" ? "Table has priority" : "Ready to advance"}</b>
-          <span className="turn-dots" aria-hidden="true"><i className="done" /><i className={game.eventStatus === "pending" ? "active" : "done"} /><i className={game.eventStatus === "resolved" ? "active" : ""} /><i /><i /></span>
+          <b>{game.responseStage !== "resolved" ? "Table has priority" : "Ready to advance"}</b>
         </div>
-        <div className="top-actions">
-          <button className="link-button" type="button" onClick={openSettings}>Table setup</button>
-          <button className="ghost-button" type="button" onClick={() => setGame((previous) => ({ ...previous, paused: !previous.paused }))}>{game.paused ? "Resume session" : "Pause session"}</button>
-        </div>
+        <button className="link-button top-action" type="button" onClick={openSettings}>Table setup</button>
       </header>
 
       <section className="workspace" id="main-workspace">
@@ -672,16 +649,16 @@ export default function Home() {
 
         <section className="encounter-column" aria-labelledby="encounter-title">
           <div className="encounter-intro">
-            <div><span className="eyebrow">{game.eventStatus === "pending" ? "Priority check" : "Outcome recorded"}</span><h1 id="encounter-title">{game.eventStatus === "pending" ? "The table acts." : "Action resolved."}</h1></div>
+            <div><span className="eyebrow">{game.responseStage !== "resolved" ? "Priority check" : "Outcome recorded"}</span><h1 id="encounter-title">{game.responseStage !== "resolved" ? "The table acts." : "Action resolved."}</h1></div>
             <span className="event-number">Event {String(game.eventCounter).padStart(2, "0")}</span>
           </div>
 
           <article className={`encounter-card event-${game.currentEvent.kind}`}>
             <div className="card-topline">
-              <span className="event-type"><i aria-hidden="true">✦</i> {eventKindLabel(game.currentEvent)}</span>
+              <span className="event-type"><i aria-hidden="true">✦</i> {EVENT_PRESENTATION[game.currentEvent.kind].label}</span>
               <span className={game.currentEvent.kind === "threat" ? "danger-badge" : "source-badge"}>{game.currentEvent.sourceName} · {game.currentEvent.card}</span>
             </div>
-            <div className={`spell-art spell-art-${game.currentEvent.kind}`} aria-hidden="true"><span>{eventGlyph(game.currentEvent)}</span><i /><i /><i /></div>
+            <div className={`spell-art spell-art-${game.currentEvent.kind}`} aria-hidden="true"><span>{EVENT_PRESENTATION[game.currentEvent.kind].glyph}</span></div>
             <div className="encounter-copy">
               <p className="source"><span className="avatar avatar-1">{game.currentEvent.sourceName.slice(0, 1)}</span> {game.currentEvent.sourceName} takes an action</p>
               <h2>{game.currentEvent.title}</h2>
@@ -702,10 +679,10 @@ export default function Home() {
               )}
             </div>
 
-            <fieldset className="event-fieldset" disabled={game.paused || game.eventStatus === "resolved"}>
+            <fieldset className="event-fieldset" disabled={game.responseStage === "resolved"}>
               {game.responseStage === "prompt" && game.currentEvent.kind !== "attack" && game.currentEvent.kind !== "development" && (
                 <div className="response-box">
-                  <span className="eyebrow">Do you have a response?</span>
+                  <span className="eyebrow" ref={responseStep} tabIndex={-1}>Do you have a response?</span>
                   <div className="response-actions">
                     <button className="primary-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "choose" }))}>Yes, I respond <span>→</span></button>
                     <button className="secondary-button" type="button" onClick={letEventResolve}>No response</button>
@@ -716,7 +693,7 @@ export default function Home() {
 
               {game.responseStage === "prompt" && game.currentEvent.kind === "development" && (
                 <div className="response-box">
-                  <span className="eyebrow">No new pressure this turn</span>
+                  <span className="eyebrow" ref={responseStep} tabIndex={-1}>No new pressure this turn</span>
                   <div className="response-actions">
                     <button className="primary-button" type="button" onClick={letEventResolve}>Record development <span>→</span></button>
                   </div>
@@ -725,7 +702,7 @@ export default function Home() {
 
               {game.responseStage === "choose" && (
                 <div className="response-box response-choice-box">
-                  <span className="eyebrow">Choose the line you used</span>
+                  <span className="eyebrow" ref={responseStep} tabIndex={-1}>Choose the line you used</span>
                   <div className="choice-grid">
                     <button type="button" onClick={() => answerEvent("counter")}><strong>Counter it</strong><small>The source may fight back.</small></button>
                     <button type="button" onClick={() => answerEvent("protect")}><strong>Protect it</strong><small>Hexproof, indestructible, phase out.</small></button>
@@ -738,7 +715,7 @@ export default function Home() {
 
               {game.responseStage === "counterback" && (
                 <div className="response-box counterback-box">
-                  <span className="danger-badge">Counter to your counter</span>
+                  <span className="danger-badge" ref={responseStep} tabIndex={-1}>Counter to your counter</span>
                   <h3>Your answer is countered.</h3>
                   <p>You have one final response window before the original action resolves.</p>
                   <div className="response-actions two-actions">
@@ -750,9 +727,9 @@ export default function Home() {
 
               {game.responseStage === "prompt" && game.currentEvent.kind === "attack" && (
                 <div className="response-box">
-                  <span className="eyebrow">Declare your defense</span>
+                  <span className="eyebrow" ref={responseStep} tabIndex={-1}>Declare your defense</span>
                   <div className="response-actions combat-actions">
-                    <button className="primary-button" type="button" onClick={() => { setIncomingRegularDraft(0); setIncomingCommanderDraft(0); setIncomingLifelinkDraft(0); setGame((previous) => ({ ...previous, responseStage: "combat" })); }}>Block / interact <span>→</span></button>
+                    <button className="primary-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "combat" }))}>Block / interact <span>→</span></button>
                     <button className="secondary-button" type="button" onClick={() => applyIncoming(incomingRegularTotal, incomingCommanderTotal, "Attack connected", incomingLifelinkTotal)}>Take the hit</button>
                     <button className="text-button" type="button" onClick={() => applyIncoming(0, 0, "Combat prevented")}>Fog / stop combat</button>
                   </div>
@@ -760,32 +737,32 @@ export default function Home() {
               )}
 
               {game.responseStage === "combat" && (
-                <div className="response-box combat-resolution">
-                  <span className="eyebrow">After blocks and interaction</span>
+                <form className="response-box combat-resolution" onSubmit={submitIncomingDamage}>
+                  <span className="eyebrow" ref={responseStep} tabIndex={-1}>After blocks and interaction</span>
                   <p>Resolve exact combat in your playtester, then enter only damage that reaches you.</p>
                   <div className="damage-inputs">
-                    <label>Regular combat damage<input type="number" min="0" max={incomingRegularTotal} value={incomingRegularDraft} onChange={(event) => setIncomingRegularDraft(Math.max(0, Number(event.target.value)))} /></label>
-                    <label>Commander combat damage<input type="number" min="0" max={incomingCommanderTotal} value={incomingCommanderDraft} onChange={(event) => setIncomingCommanderDraft(Math.max(0, Number(event.target.value)))} /></label>
-                    {incomingLifelinkTotal > 0 && <label>Lifelink damage dealt<input type="number" min="0" max={incomingLifelinkTotal} value={incomingLifelinkDraft} onChange={(event) => setIncomingLifelinkDraft(Math.min(incomingLifelinkTotal, Math.max(0, Number(event.target.value))))} /></label>}
+                    <label>Regular combat damage<input name="incoming-regular" type="number" min="0" max={incomingRegularTotal} defaultValue="0" /></label>
+                    <label>Commander combat damage<input name="incoming-commander" type="number" min="0" max={incomingCommanderTotal} defaultValue="0" /></label>
+                    {incomingLifelinkTotal > 0 && <label>Lifelink damage dealt<input name="incoming-lifelink" type="number" min="0" max={incomingLifelinkTotal} defaultValue="0" /></label>}
                   </div>
                   <div className="modal-actions compact-actions">
                     <button className="text-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "prompt" }))}>Back</button>
-                    <button className="primary-button" type="button" onClick={() => applyIncoming(Math.min(incomingRegularTotal, incomingRegularDraft), Math.min(incomingCommanderTotal, incomingCommanderDraft), "Combat resolved", Math.min(incomingLifelinkTotal, incomingLifelinkDraft))}>Apply damage <span>→</span></button>
+                    <button className="primary-button" type="submit">Apply damage <span>→</span></button>
                   </div>
-                </div>
+                </form>
               )}
             </fieldset>
 
-            {game.eventStatus === "resolved" && (
-              <div className="resolved-box" role="status"><span className="resolved-mark">✓</span><div><span className="eyebrow">Recorded</span><strong>{game.resolution}</strong></div></div>
+            {game.responseStage === "resolved" && (
+              <div className="resolved-box" role="status"><span className="resolved-mark">✓</span><div><span className="eyebrow" ref={responseStep} tabIndex={-1}>Recorded</span><strong>{game.resolution}</strong></div></div>
             )}
           </article>
 
           <div className="next-action">
-            <div><span className="eyebrow">Up next</span><strong>{game.eventStatus === "resolved" ? "Advance one full table round." : "Resolve this event, then advance the table."}</strong></div>
+            <div><span className="eyebrow">Up next</span><strong>{game.responseStage === "resolved" ? "Advance one full table round." : "Resolve this event, then advance the table."}</strong></div>
             <div className="next-buttons">
               <button className="undo-button" type="button" onClick={undo} disabled={!canUndo}>Undo</button>
-              <button className="advance-button" type="button" onClick={advanceTurn} disabled={game.eventStatus !== "resolved" || game.paused || Boolean(game.gameOver)}>Next turn <span>→</span></button>
+              <button className="advance-button" type="button" onClick={advanceTurn} disabled={game.responseStage !== "resolved" || Boolean(game.gameOver)}>Next turn <span>→</span></button>
             </div>
           </div>
         </section>
@@ -823,13 +800,13 @@ export default function Home() {
 
       <footer className="session-footer">
         <span>Session seed <b>{game.seed}</b></span>
-        <button type="button" onClick={() => setLibraryOpen(true)}>Scenario library · {CARD_LIBRARY_UPDATED}</button>
+        <button type="button" onClick={() => setActiveModal("library")}>Scenario library · {CARD_LIBRARY_UPDATED}</button>
         <span>{hydrated ? "Draft saved on this device" : "Loading session…"}</span>
-        <button type="button" onClick={() => setResetOpen(true)}>Restart session</button>
+        <button type="button" onClick={() => setActiveModal("reset")}>Restart session</button>
       </footer>
 
-      {settingsOpen && (
-        <Modal title="Set up the table" subtitle="Choose one to three matchup profiles. Each deck package shapes the action mix; its bracket sets pacing and interaction frequency." onClose={() => setSettingsOpen(false)} wide>
+      {activeModal === "settings" && (
+        <Modal title="Set up the table" subtitle="Choose one to three matchup profiles. Each deck package shapes the action mix; its bracket sets pacing and interaction frequency." onClose={() => setActiveModal(null)} wide>
           <div className="settings-body">
             <div className="opponent-settings">
               {settingsOpponents.map((opponent, index) => {
@@ -860,12 +837,12 @@ export default function Home() {
               <p>Profiles are abstract matchup presets, not complete color-identity-checked decklists.</p>
             </div>
           </div>
-          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setSettingsOpen(false)}>Cancel</button><button className="primary-button" type="button" onClick={saveSettings}>Apply and reroll <span>→</span></button></div>
+          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setActiveModal(null)}>Cancel</button><button className="primary-button" type="button" onClick={saveSettings}>Apply and reroll <span>→</span></button></div>
         </Modal>
       )}
 
-      {combatOpen && (
-        <Modal title="Assign your attack" subtitle="Add the creatures you tapped in your playtester, roll one table defense, then confirm damage." onClose={() => setCombatOpen(false)} wide>
+      {activeModal === "combat" && (
+        <Modal title="Assign your attack" subtitle="Add the creatures you tapped in your playtester, roll one table defense, then confirm damage." onClose={() => setActiveModal(null)} wide>
           <div className="combat-builder">
             <label className="target-select">Attack target<select value={combatTarget} onChange={(event) => { setCombatTarget(event.target.value); setDefense(null); }}>{livingOpponents.map((opponent) => <option value={opponent.id} key={opponent.id}>{opponent.name} · {PROFILE_LABELS[opponent.profile]} · {bracketLabel(opponent.bracket)} · {opponent.life} life</option>)}</select></label>
             <div className="attacker-form">
@@ -886,38 +863,38 @@ export default function Home() {
             <button className="roll-button" type="button" onClick={simulateDefense} disabled={!outgoingAttackers.length || !combatTarget}>Roll defending player’s response <span>↻</span></button>
 
             {defense && (
-              <div className={`defense-result defense-${defense.type}`} role="status">
+              <div className={`defense-result defense-${defense.type}`} role="status" ref={defenseResult} tabIndex={-1}>
                 <span className="eyebrow">Defense outcome</span><h3>{defense.title}</h3><p>{defense.detail}</p>
                 {defense.type !== "none" && <button className="text-button" type="button" onClick={answerDefense}>I can answer this defense</button>}
               </div>
             )}
 
             {defense && (
-              <div className="damage-confirm">
+              <form className="damage-confirm" id="outgoing-damage-form" key={`${game.defenseCounter}-${defense.type}`} onSubmit={applyOutgoingDamage}>
                 <span className="eyebrow">Damage that gets through</span>
                 <p>Override these values after resolving blocks, removal, or prevention in your playtester.</p>
                 <div className="damage-inputs">
-                  <label>Noncommander damage<input type="number" min="0" max={outgoingDamageLimit.regular} value={regularDamageDraft} onChange={(event) => setRegularDamageDraft(Math.min(outgoingDamageLimit.regular, Math.max(0, Number(event.target.value))))} /></label>
-                  {outgoingAttackers.filter((attacker) => attacker.isCommander).map((attacker) => <label key={attacker.id}>{attacker.name} damage<input type="number" min="0" max={outgoingDamageLimit.commander[attacker.id] ?? 0} value={commanderDamageDraft[attacker.id] ?? 0} onChange={(event) => setCommanderDamageDraft((current) => ({ ...current, [attacker.id]: Math.min(outgoingDamageLimit.commander[attacker.id] ?? 0, Math.max(0, Number(event.target.value))) }))} /></label>)}
-                  {outgoingDamageLimit.lifelink > 0 && <label>Lifelink damage dealt<input type="number" min="0" max={outgoingDamageLimit.lifelink} value={outgoingLifelinkDraft} onChange={(event) => setOutgoingLifelinkDraft(Math.min(outgoingDamageLimit.lifelink, Math.max(0, Number(event.target.value))))} /></label>}
+                  <label>Noncommander damage<input name="outgoing-regular" type="number" min="0" max={outgoingDamageLimit.regular} defaultValue={outgoingDamageLimit.regular} /></label>
+                  {outgoingAttackers.filter((attacker) => attacker.isCommander).map((attacker) => <label key={attacker.id}>{attacker.name} damage<input name={`commander-${attacker.id}`} type="number" min="0" max={outgoingDamageLimit.commander[attacker.id] ?? 0} defaultValue={outgoingDamageLimit.commander[attacker.id] ?? 0} /></label>)}
+                  {outgoingDamageLimit.lifelink > 0 && <label>Lifelink damage dealt<input name="outgoing-lifelink" type="number" min="0" max={outgoingDamageLimit.lifelink} defaultValue={outgoingDamageLimit.lifelink} /></label>}
                 </div>
-              </div>
+              </form>
             )}
           </div>
-          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setCombatOpen(false)}>Cancel</button><button className="primary-button" type="button" onClick={applyOutgoingDamage} disabled={!defense}>Apply damage <span>→</span></button></div>
+          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setActiveModal(null)}>Cancel</button><button className="primary-button" type="submit" form="outgoing-damage-form" disabled={!defense}>Apply damage <span>→</span></button></div>
         </Modal>
       )}
 
-      {libraryOpen && (
-        <Modal title="Curated scenario library" subtitle="Versioned, emblematic examples flavor the simulation; generic rules-aware outcomes keep working even when the catalog is stale." onClose={() => setLibraryOpen(false)} wide>
+      {activeModal === "library" && (
+        <Modal title="Curated scenario library" subtitle="Versioned, emblematic examples flavor the simulation; generic rules-aware outcomes keep working even when the catalog is stale." onClose={() => setActiveModal(null)} wide>
           <div className="library-grid">{CARD_LIBRARY.map((group) => <article key={group.archetype}><span className="eyebrow">Archetype</span><h3>{group.archetype}</h3><ul>{group.cards.map((card) => <li key={card}>{card}</li>)}</ul></article>)}</div>
           <div className="library-note"><strong>Library updated {CARD_LIBRARY_UPDATED}</strong><p>Scenario language follows Wizards’ definitions for counter, destroy, exile, flying, reach, trample, menace, deathtouch, first strike, double strike, hexproof, and indestructible.</p><a href="https://magic.wizards.com/en/keyword-glossary" target="_blank" rel="noreferrer">Open the official keyword glossary ↗</a></div>
         </Modal>
       )}
 
-      {resetOpen && (
-        <Modal title="Restart this session?" subtitle="This clears life totals, damage, threats, and history. Your opponent profiles stay in place." onClose={() => setResetOpen(false)}>
-          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setResetOpen(false)}>Keep playing</button><button className="danger-button" type="button" onClick={resetSession}>Restart with a new seed</button></div>
+      {activeModal === "reset" && (
+        <Modal title="Restart this session?" subtitle="This clears life totals, damage, threats, and history. Your opponent profiles stay in place." onClose={() => setActiveModal(null)}>
+          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setActiveModal(null)}>Keep playing</button><button className="danger-button" type="button" onClick={resetSession}>Restart with a new seed</button></div>
         </Modal>
       )}
 

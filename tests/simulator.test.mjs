@@ -11,7 +11,6 @@ import {
   incomingCommanderDamage,
   incomingDamage,
   normalizeCommanderBracket,
-  opponentCommanderKey,
   rollDefense,
   userCommanderKey,
 } from "../app/simulator.ts";
@@ -114,7 +113,6 @@ test("commander damage is tracked per source and becomes lethal at 21", () => {
 });
 
 test("commander identities stay separate from display names and partner damage", () => {
-  assert.equal(opponentCommanderKey("one"), opponentCommanderKey("one"));
   assert.notEqual(userCommanderKey("primary"), userCommanderKey("partner"));
   const split = applyCombatDamage({
     life: 40,

@@ -4,13 +4,9 @@ export type Keyword = "Flying" | "Reach" | "Trample" | "Menace" | "Vigilance" | 
 export type CommanderSlot = "primary" | "partner";
 export type CommanderBracket = 1 | 2 | 3 | 4 | 5;
 
-export function opponentCommanderKey(opponentId: string) {
-  return `opponent:${opponentId}:commander`;
-}
+export const opponentCommanderKey = (opponentId: string) => `opponent:${opponentId}:commander`;
 
-export function userCommanderKey(slot: CommanderSlot) {
-  return `user:${slot}:commander`;
-}
+export const userCommanderKey = (slot: CommanderSlot) => `user:${slot}:commander`;
 
 export type Opponent = {
   id: string;
@@ -178,9 +174,7 @@ function rngFor(value: string) {
   };
 }
 
-function intBetween(random: () => number, minimum: number, maximum: number) {
-  return Math.floor(random() * (maximum - minimum + 1)) + minimum;
-}
+const intBetween = (random: () => number, minimum: number, maximum: number) => Math.floor(random() * (maximum - minimum + 1)) + minimum;
 
 function weightedPick<T extends string>(random: () => number, weights: Record<T, number>): T {
   const entries = Object.entries(weights) as [T, number][];
@@ -270,13 +264,9 @@ function generateAttack(random: () => number, turn: number, source: Opponent, pa
   });
 }
 
-export function incomingDamage(attackers: Attacker[]) {
-  return attackers.reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0);
-}
+export const incomingDamage = (attackers: Attacker[]) => attackers.reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0);
 
-export function incomingCommanderDamage(attackers: Attacker[]) {
-  return attackers.filter((attacker) => attacker.isCommander).reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0);
-}
+export const incomingCommanderDamage = (attackers: Attacker[]) => attackers.filter((attacker) => attacker.isCommander).reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0);
 
 export function generateEvent(input: {
   turn: number;
@@ -333,8 +323,7 @@ export function generateEvent(input: {
 
   let candidates = EVENT_TEMPLATES.filter((template) => template.kind === kind && isEligible(template) && !recentTemplateIds.includes(template.id));
   if (!candidates.length) candidates = EVENT_TEMPLATES.filter((template) => template.kind === kind && isEligible(template));
-  const guaranteedIds = new Set(profile.guaranteedCards.map((card) => card.templateId));
-  const guaranteedCandidates = candidates.filter((template) => guaranteedIds.has(template.id));
+  const guaranteedCandidates = candidates.filter((template) => profile.guaranteedCards.some((card) => card.templateId === template.id));
   if (guaranteedCandidates.length) candidates = guaranteedCandidates;
   const template = candidates[intBetween(random, 0, candidates.length - 1)];
 
