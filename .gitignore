@@ -6,6 +6,17 @@
 /.wrangler/
 /work/
 *.tsbuildinfo
-.env*
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+.dev.vars*
+.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+
 npm-debug.log*
 .DS_Store

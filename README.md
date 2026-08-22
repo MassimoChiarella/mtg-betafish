@@ -7,7 +7,7 @@ A browser companion for stress-testing Magic: The Gathering Commander decks whil
 Requires Node.js 22.18 or newer.
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
@@ -36,7 +36,14 @@ Bracket names and turn guidance follow Wizardsâ€™ current beta system. The appâ€
 
 ```bash
 npm run build
+npm run lint
 npm test
 ```
+
+## Configuration and secrets
+
+MTG Betafish currently needs no API keys or local environment variables. Scryfall card data and images use its public API without authentication.
+
+If configuration is added later, keep local values in `.env.local` or `.dev.vars`; these files, project-level npm credentials, and common private-key formats are ignored. Commit only placeholder values in `.env.example`, and store production secrets in the hosting platform's secret manager.
 
 Magic: The Gathering and Commander are trademarks of Wizards of the Coast. MTG Betafish is an unofficial companion and is not affiliated with Wizards of the Coast or Archidekt.
