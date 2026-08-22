@@ -17,7 +17,22 @@
 
 * { box-sizing: border-box; }
 html { min-width: 320px; background: var(--wood-deep); scroll-behavior: smooth; }
-body { margin: 0; background-color: var(--wood); background-image: radial-gradient(circle at 8% 14%, rgba(247,210,99,.28) 0 1px, transparent 2px), radial-gradient(circle at 88% 28%, rgba(91,208,171,.2) 0 1px, transparent 2px), radial-gradient(circle at 72% 76%, rgba(169,113,202,.17) 0 1px, transparent 2px), linear-gradient(90deg, rgba(18,9,5,.36), transparent 22%, rgba(246,201,95,.06) 52%, transparent 76%, rgba(18,9,5,.34)), repeating-linear-gradient(2deg, rgba(255,236,194,.025) 0 1px, transparent 1px 7px), repeating-linear-gradient(92deg, #2b170e 0 28px, #3b2114 29px 56px, #4a2a19 57px 88px); color: var(--ink); font-family: Arial, Helvetica, sans-serif; -webkit-font-smoothing: antialiased; }
+body {
+  margin: 0;
+  background-color: var(--wood);
+  background-image:
+    radial-gradient(ellipse at 16% 28%, transparent 0 12px, rgba(11,5,2,.34) 13px 15px, transparent 17px),
+    radial-gradient(ellipse at 77% 72%, rgba(9,4,2,.22) 0 4px, transparent 5px 14px, rgba(224,173,88,.045) 15px 16px, transparent 18px),
+    radial-gradient(circle at 8% 14%, rgba(247,210,99,.22) 0 1px, transparent 2px),
+    radial-gradient(circle at 88% 28%, rgba(91,208,171,.16) 0 1px, transparent 2px),
+    radial-gradient(circle at 72% 76%, rgba(169,113,202,.14) 0 1px, transparent 2px),
+    linear-gradient(91deg, rgba(12,6,3,.46), transparent 18%, rgba(232,181,92,.04) 49%, transparent 73%, rgba(12,6,3,.42)),
+    repeating-linear-gradient(7deg, rgba(255,225,164,.025) 0 1px, transparent 1px 9px),
+    repeating-linear-gradient(91deg, #29160d 0 24px, #432617 25px 51px, #1d0f09 52px 54px, #3b2114 55px 86px, #24120b 87px 90px);
+  color: var(--ink);
+  font-family: Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
 button, input, select { font: inherit; }
 button { cursor: pointer; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; box-shadow: 0 0 0 2px var(--panel); }
@@ -338,22 +353,27 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 /* A carved storybook game box: walnut shell, brass trim, parchment trays. */
 .topbar {
-  border-bottom: 2px solid var(--gold);
+  border-bottom: 2px solid #9b742e;
   background:
-    linear-gradient(90deg, rgba(21,11,7,.97), rgba(70,39,22,.96) 48%, rgba(27,14,8,.97)),
-    repeating-linear-gradient(4deg, transparent 0 7px, rgba(255,225,164,.04) 8px 9px);
+    radial-gradient(ellipse at 18% 55%, transparent 0 12px, rgba(10,4,2,.36) 13px 15px, transparent 17px),
+    radial-gradient(ellipse at 82% 20%, rgba(4,2,1,.24), transparent 35%),
+    repeating-linear-gradient(6deg, rgba(245,208,133,.035) 0 1px, transparent 1px 8px),
+    linear-gradient(93deg, #180c07, #4b2a19 33%, #2d180f 61%, #140a06);
   color: #f8edcf;
-  box-shadow: inset 0 -1px 0 #f4d27b, 0 10px 28px rgba(16,8,5,.35);
+  box-shadow: inset 0 -1px 0 #c79d48, inset 0 -5px 12px rgba(7,3,2,.4), inset 0 1px rgba(255,222,153,.08), 0 10px 28px rgba(16,8,5,.4);
 }
 .brand, .turn-strip b { color: #fff3d1; }
 .brand small, .topbar .eyebrow, .topbar .top-action { color: #e6bd58; }
 
 .workspace {
   background:
-    radial-gradient(ellipse at 50% -8%, rgba(239,192,78,.19), transparent 42%),
-    radial-gradient(circle at 7% 35%, rgba(61,151,117,.12), transparent 25%),
-    radial-gradient(circle at 92% 58%, rgba(135,78,166,.10), transparent 23%);
-  box-shadow: inset 1px 0 rgba(226,180,69,.36), inset -1px 0 rgba(226,180,69,.36);
+    radial-gradient(ellipse at 3% 52%, rgba(8,4,2,.25), transparent 20%),
+    radial-gradient(ellipse at 97% 60%, rgba(8,4,2,.28), transparent 22%),
+    radial-gradient(ellipse at 50% -8%, rgba(239,192,78,.16), transparent 42%),
+    radial-gradient(circle at 7% 35%, rgba(61,151,117,.1), transparent 25%),
+    radial-gradient(circle at 92% 58%, rgba(135,78,166,.08), transparent 23%),
+    repeating-linear-gradient(174deg, transparent 0 35px, rgba(248,216,150,.02) 36px, transparent 37px);
+  box-shadow: inset 9px 0 22px rgba(9,4,2,.2), inset -9px 0 22px rgba(9,4,2,.22), inset 1px 0 rgba(226,180,69,.3), inset -1px 0 rgba(226,180,69,.3);
 }
 .workspace > .rail .section-heading h2, .encounter-intro h1 {
   color: #fff1cf;
@@ -473,18 +493,25 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .resolved-box { border-color: #8fae83; background: #e4edcf; }
 
 .modal {
-  border: 2px solid var(--gold);
-  background: var(--paper);
-  box-shadow: 0 0 0 5px var(--wood-deep), 0 0 0 7px #916c2a, 0 35px 90px rgba(0,0,0,.55);
+  border: 2px solid #967029;
+  background-color: var(--paper);
+  background-image:
+    radial-gradient(ellipse at 8% 4%, rgba(91,52,20,.045), transparent 30%),
+    radial-gradient(ellipse at 92% 96%, rgba(91,52,20,.04), transparent 28%),
+    repeating-linear-gradient(7deg, rgba(91,52,20,.016) 0 1px, transparent 1px 8px);
+  box-shadow: 0 0 0 5px #180d08, 0 0 0 7px #765622, 0 35px 90px rgba(0,0,0,.58), inset 0 0 30px rgba(75,42,17,.07);
 }
 .modal::backdrop { background: rgba(15,8,5,.78); backdrop-filter: blur(6px); }
 .modal-header { border-color: var(--line); background: rgba(242,225,183,.97); }
 .modal-actions { border-color: var(--line); }
 
 .session-footer {
-  border-top: 2px solid var(--gold);
-  background: linear-gradient(90deg, #21120b, #462719 50%, #21120b);
+  border-top: 2px solid #9b742e;
+  background:
+    radial-gradient(ellipse at 74% 30%, rgba(5,2,1,.28), transparent 27%),
+    repeating-linear-gradient(5deg, rgba(245,208,133,.025) 0 1px, transparent 1px 8px),
+    linear-gradient(91deg, #170b07, #3f2215 39%, #28150d 67%, #140a06);
   color: #d6c69f;
-  box-shadow: inset 0 1px #f0cf73;
+  box-shadow: inset 0 1px #bc9140, inset 0 5px 12px rgba(7,3,2,.32);
 }
 .session-footer button { color: #e8c569; }
