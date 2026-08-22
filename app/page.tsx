@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   applyCombatDamage,
   CARD_LIBRARY,
@@ -26,6 +26,7 @@ import {
   type SimEvent,
   type Threat,
 } from "./simulator";
+import { loadCardImage } from "./scryfall";
 
 type ResponseStage = "prompt" | "choose" | "counterback" | "combat" | "resolved";
 type HistoryTone = "success" | "damage" | "warning" | "neutral";
@@ -137,6 +138,80 @@ const EVENT_PRESENTATION = {
   threat: { label: "Game-ending threat", glyph: "!" },
   development: { label: "Table development", glyph: "…" },
 } satisfies Record<SimEvent["kind"], { label: string; glyph: string }>;
+
+function CardPreview({ name, lookupName = name }: { name: string; lookupName?: string | null }) {
+  const previewId = useId();
+  const trigger = useRef<HTMLButtonElement>(null);
+  const preview = useRef<HTMLSpanElement>(null);
+  const hoverTimer = useRef<number>(undefined);
+  const [requestedName, setRequestedName] = useState<string>();
+  const [result, setResult] = useState<{ name: string; image: string | null }>();
+  const [loadedImage, setLoadedImage] = useState<string>();
+  const [failedImage, setFailedImage] = useState<string>();
+  const image = result?.name === lookupName ? result.image : undefined;
+
+  useEffect(() => {
+    if (!lookupName || requestedName !== lookupName || image !== undefined) return;
+    let active = true;
+    void loadCardImage(lookupName).then((url) => { if (active) setResult({ name: lookupName, image: url }); });
+    return () => { active = false; };
+  }, [image, lookupName, requestedName]);
+
+  useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
+
+  if (!lookupName) return name;
+  const cardName = lookupName;
+
+  function showPreview(delay = 0) {
+    window.clearTimeout(hoverTimer.current);
+    hoverTimer.current = window.setTimeout(() => {
+      const target = trigger.current;
+      const panel = preview.current;
+      if (!target || !panel) return;
+      const rect = target.getBoundingClientRect();
+      const width = Math.min(220, window.innerWidth - 24);
+      const roomAbove = rect.top - 12;
+      const roomBelow = window.innerHeight - rect.bottom - 12;
+      const side = Math.max(roomAbove, roomBelow) < 320 ? "center" : roomAbove > roomBelow ? "above" : "below";
+      panel.style.left = `${Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2))}px`;
+      panel.style.top = `${side === "above" ? rect.top - 10 : side === "below" ? rect.bottom + 10 : 12}px`;
+      panel.dataset.side = side;
+      setRequestedName(cardName);
+      if (!panel.matches(":popover-open")) panel.showPopover();
+    }, delay);
+  }
+
+  function closePreview(delay = 0) {
+    window.clearTimeout(hoverTimer.current);
+    hoverTimer.current = window.setTimeout(() => {
+      const panel = preview.current;
+      if (panel?.matches(":popover-open")) panel.hidePopover();
+    }, delay);
+  }
+
+  return (
+    <span className="card-preview">
+      <button
+        className="card-preview-trigger"
+        type="button"
+        ref={trigger}
+        aria-describedby={previewId}
+        onPointerEnter={(event) => { if (event.pointerType !== "touch") showPreview(160); }}
+        onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== event.currentTarget) closePreview(160); }}
+        onFocus={() => showPreview()}
+        onBlur={() => closePreview()}
+        onClick={() => showPreview()}
+        onKeyDown={(event) => { if (event.key === "Escape") closePreview(); }}
+      >{name}</button>
+      <span className="card-preview-panel" id={previewId} role="tooltip" ref={preview} popover="auto" onPointerEnter={() => window.clearTimeout(hoverTimer.current)} onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== trigger.current) closePreview(160); }}>
+        {(image === undefined || (image && loadedImage !== image && failedImage !== image)) && <span className="card-preview-status" role="status">Loading card image…</span>}
+        {(image === null || failedImage === image) && <span className="card-preview-status" role="status">Card image unavailable.</span>}
+        {/* eslint-disable-next-line @next/next/no-img-element -- Scryfall provides runtime image URLs */}
+        {image && failedImage !== image && <img className={loadedImage === image ? "" : "pending"} src={image} alt={`${cardName} card`} decoding="async" onLoad={() => setLoadedImage(image)} onError={() => setFailedImage(image)} />}
+      </span>
+    </span>
+  );
+}
 
 function Modal({ title, subtitle, onClose, children, wide = false, dismissible = true }: {
   title: string;
@@ -588,6 +663,9 @@ export default function Home() {
   const maxUserCommanderDamage = highestCommanderDamage(game.userCommanderDamage);
   const tableDefeated = game.opponents.every((opponent) => opponent.eliminated);
   const userDefeated = game.userLife <= 0 || maxUserCommanderDamage >= 21;
+  const eventCardLookup = game.currentEvent.kind === "attack" || game.currentEvent.kind === "development" || game.currentEvent.templateId === "random-discard"
+    ? null
+    : game.currentEvent.templateId === "combo-clock" ? "Thassa’s Oracle" : game.currentEvent.card;
   // eslint-disable-next-line react-hooks/refs -- every stack mutation also updates game state
   const canUndo = undoStack.current.length > 0;
   const opponentCommanderLabels = Object.fromEntries(game.opponents.map((opponent) => [opponentCommanderKey(opponent.id), `${opponent.name}’s commander`]));
@@ -656,7 +734,7 @@ export default function Home() {
           <article className={`encounter-card event-${game.currentEvent.kind}`}>
             <div className="card-topline">
               <span className="event-type"><i aria-hidden="true">✦</i> {EVENT_PRESENTATION[game.currentEvent.kind].label}</span>
-              <span className={game.currentEvent.kind === "threat" ? "danger-badge" : "source-badge"}>{game.currentEvent.sourceName} · {game.currentEvent.card}</span>
+              <span className={game.currentEvent.kind === "threat" ? "danger-badge" : "source-badge"}>{game.currentEvent.sourceName} · <CardPreview name={game.currentEvent.card} lookupName={eventCardLookup} /></span>
             </div>
             <div className={`spell-art spell-art-${game.currentEvent.kind}`} aria-hidden="true"><span>{EVENT_PRESENTATION[game.currentEvent.kind].glyph}</span></div>
             <div className="encounter-copy">
@@ -823,7 +901,7 @@ export default function Home() {
                     <label>Deck profile<select value={opponent.profile} aria-describedby={profileDescriptionId} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, profile: event.target.value as ProfileId } : item))}>{Object.entries(PROFILE_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
                     <label>Commander bracket<select value={bracket} aria-describedby={bracketDescriptionId} onChange={(event) => setSettingsOpponents((current) => current.map((item) => item.id === opponent.id ? { ...item, bracket: Number(event.target.value) as CommanderBracket } : item))}>{Object.entries(COMMANDER_BRACKETS).map(([value, rules]) => <option value={value} key={value}>B{value} {rules.label}</option>)}</select></label>
                     <button className="remove-button" type="button" onClick={() => setSettingsOpponents((current) => current.filter((item) => item.id !== opponent.id))} disabled={settingsOpponents.length === 1} aria-label={`Remove ${opponent.name}`}>Remove</button>
-                    <div className="profile-setting-copy" id={profileDescriptionId}><p>{profile.description}</p><p><strong>Included cards:</strong> {profile.guaranteedCards.map((card) => card.name).join(" · ")} <span>(in the simulated deck; not guaranteed drawn)</span></p></div>
+                    <div className="profile-setting-copy" id={profileDescriptionId}><p>{profile.description}</p><p><strong>Included cards:</strong> {profile.guaranteedCards.map((card, cardIndex) => <span key={card.name}>{cardIndex > 0 && " · "}<CardPreview name={card.name} /></span>)} <span>(in the simulated deck; not guaranteed drawn)</span></p></div>
                     <p className="bracket-setting-copy" id={bracketDescriptionId}><strong>{bracketLabel(bracket)}:</strong> {bracketRules.summary} {bracketRules.turnGuide}</p>
                   </fieldset>
                 );
@@ -887,7 +965,7 @@ export default function Home() {
 
       {activeModal === "library" && (
         <Modal title="Curated scenario library" subtitle="Versioned, emblematic examples flavor the simulation; generic rules-aware outcomes keep working even when the catalog is stale." onClose={() => setActiveModal(null)} wide>
-          <div className="library-grid">{CARD_LIBRARY.map((group) => <article key={group.archetype}><span className="eyebrow">Archetype</span><h3>{group.archetype}</h3><ul>{group.cards.map((card) => <li key={card}>{card}</li>)}</ul></article>)}</div>
+          <div className="library-grid">{CARD_LIBRARY.map((group) => <article key={group.archetype}><span className="eyebrow">Archetype</span><h3>{group.archetype}</h3><ul>{group.cards.map((card) => <li key={card}><CardPreview name={card} /></li>)}</ul></article>)}</div>
           <div className="library-note"><strong>Library updated {CARD_LIBRARY_UPDATED}</strong><p>Scenario language follows Wizards’ definitions for counter, destroy, exile, flying, reach, trample, menace, deathtouch, first strike, double strike, hexproof, and indestructible.</p><a href="https://magic.wizards.com/en/keyword-glossary" target="_blank" rel="noreferrer">Open the official keyword glossary ↗</a></div>
         </Modal>
       )}
