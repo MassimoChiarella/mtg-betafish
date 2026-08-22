@@ -1059,7 +1059,7 @@ export default function Home() {
         <aside className="rail pressure-panel" aria-label="Table pressure">
           <section aria-labelledby="threat-title" aria-live="polite">
             <div className="section-heading">
-              <div><span className="eyebrow">Clock is ticking</span><h2 id="threat-title" ref={threatHeading} tabIndex={-1}>Active threat</h2></div>
+              <div><h2 id="threat-title" ref={threatHeading} tabIndex={-1}>Active threat</h2></div>
               {game.activeThreat && <span className={`countdown ${game.activeThreat.remaining <= 1 ? "imminent" : ""}`}>{game.activeThreat.remaining} {game.activeThreat.remaining === 1 ? "turn" : "turns"}</span>}
             </div>
             {game.activeThreat ? (
