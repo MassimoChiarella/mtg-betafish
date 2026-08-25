@@ -905,10 +905,11 @@ export default function Home() {
     ?? (game.responseStage !== "resolved" ? `${EVENT_PRESENTATION[game.currentEvent.kind].label}: ${game.currentEvent.title}` : game.resolution);
   return (
     <main className="app-shell">
+      <a className="skip-link" href="#main-workspace">Skip to table workspace</a>
       <div className="sr-only" aria-live="polite" aria-atomic="true">{game.gameOver ? "" : liveMessage}</div>
 
       <header className="topbar">
-        <a className="brand" href="#main-workspace" aria-label="MTG Betafish home">
+        <a className="brand" href="#main-workspace" aria-label="MTG Betafish — jump to table workspace">
           <span><strong>MTG</strong><small>Betafish</small></span>
         </a>
         <div className="turn-strip" aria-label={`Turn ${game.turn}`}>
