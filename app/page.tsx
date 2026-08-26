@@ -914,7 +914,10 @@ export default function Home() {
         </a>
         <div className="turn-strip" aria-label={`Turn ${game.turn}`}>
           <span className="eyebrow">Turn {game.turn}</span>
-          <b>{game.responseStage !== "resolved" ? <>Table has <GlossaryTerm term="Priority">priority</GlossaryTerm></> : "Ready to advance"}</b>
+          <span className="turn-status-row">
+            <b>{game.responseStage !== "resolved" ? <>Table has <GlossaryTerm term="Priority">priority</GlossaryTerm></> : "Ready to advance"}</b>
+            {game.activeThreat && <span className={`top-threat ${game.activeThreat.remaining <= 1 ? "imminent" : ""}`}>Threat · {game.activeThreat.remaining} {game.activeThreat.remaining === 1 ? "turn" : "turns"}</span>}
+          </span>
         </div>
         <button className="link-button top-action" type="button" onClick={openSettings}>Table setup</button>
       </header>
