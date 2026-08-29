@@ -89,6 +89,16 @@ test("table settings expose the selected profile and bracket core", () => {
   assert.doesNotMatch(settings, /guaranteedCards/);
 });
 
+test("signature-card reveals expose the exact card through the shared preview", () => {
+  const presentation = sourceSection(pageSource, "const EVENT_PRESENTATION", "const GLOSSARY_MATCHES");
+  const lookup = sourceSection(pageSource, "const eventCardLookup", "const canUndo");
+  const encounter = sourceSection(pageSource, '<article className={`encounter-card', '<div className="tag-row">');
+
+  assert.match(presentation, /development: \{ label: "Signature card reveal"/);
+  assert.doesNotMatch(lookup, /kind === "development"/);
+  assert.match(encounter, /game\.currentEvent\.kind === "development"[^\n]+<strong>Signature card:<\/strong> <CardPreview name=\{game\.currentEvent\.card\} \/>/);
+});
+
 test("accessible client contracts use one game-over announcement and native combat semantics", () => {
   assert.equal(pageSource.match(/role="alert"/g)?.length ?? 0, 0);
   assert.match(pageSource, /aria-live="polite" aria-atomic="true">\{game\.gameOver \? "" : liveMessage\}/);
@@ -158,7 +168,11 @@ test("glossary previews stay separate from one-click game actions", () => {
   assert.match(cardPreview, /useHoverPreview<HTMLButtonElement>/);
   assert.match(cardPreview, /popoverTarget=\{previewId\}/);
   assert.match(cardPreview, /popoverTargetAction="toggle"/);
+  assert.match(cardPreview, /onPointerEnter=[^\n]+showPreview\(160\)/);
+  assert.match(cardPreview, /onPointerLeave=[^\n]+closePreview\(160\)/);
   assert.match(cardPreview, /onClick=\{preparePreview\}/);
+  assert.match(cardPreview, /loadCardImage\(lookupName\)/);
+  assert.match(cardPreview, /alt=\{`\$\{cardName\} card`\}/);
   assert.match(glossaryTerm, /useHoverPreview<HTMLButtonElement>/);
   assert.match(glossaryTerm, /aria-describedby=\{previewId\}/);
   assert.match(glossaryTerm, /popoverTarget=\{previewId\}/);

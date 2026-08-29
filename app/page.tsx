@@ -147,7 +147,7 @@ const EVENT_PRESENTATION = {
   disruption: { label: "Table disruption", glyph: "◇" },
   attack: { label: "Incoming combat", glyph: "⚔" },
   threat: { label: "Game-ending threat", glyph: "!" },
-  development: { label: "Table development", glyph: "…" },
+  development: { label: "Signature card reveal", glyph: "…" },
 } satisfies Record<SimEvent["kind"], { label: string; glyph: string }>;
 
 const GLOSSARY_MATCHES = {
@@ -938,6 +938,7 @@ export default function Home() {
             <div className="encounter-copy">
               <p className="source"><span className="avatar avatar-1">{game.currentEvent.sourceName.slice(0, 1)}</span> {game.currentEvent.sourceName} takes an action</p>
               <h2>{glossaryText(game.currentEvent.title, encounterGlossaryTerms)}</h2>
+              {game.currentEvent.kind === "development" && <p><strong>Signature card:</strong> <CardPreview name={game.currentEvent.card} /></p>}
               <p>{glossaryText(game.currentEvent.prompt, encounterGlossaryTerms)}</p>
               <div className="tag-row">{game.currentEvent.tags.map((tag) => <span className="event-tag" key={tag}>{glossaryText(tag, encounterGlossaryTerms)}</span>)}</div>
 

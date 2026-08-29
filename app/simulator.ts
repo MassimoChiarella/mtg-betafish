@@ -439,7 +439,7 @@ export function generateEvent(input: {
       sourceId: source.id,
       sourceName: source.name,
       title: `${source.name} reveals a signature card.`,
-      prompt: `${coreCard} is a matchup-defining inclusion for this profile and bracket. It is not being cast by this event; use the breathing room to advance your own plan.`,
+      prompt: "This is a matchup-defining inclusion for this profile and bracket. It is not being cast by this event; use the breathing room to advance your own plan.",
       card: coreCard,
       tags: ["Deck intel", "Core card", `B${bracket} ${bracketRules.label}`],
     };
