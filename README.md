@@ -17,14 +17,14 @@ Open the printed local URL, keep your deck playtester beside it, and resolve eac
 
 - one to three opponent deck profiles with visible, bracket-specific core-card packages
 - per-opponent Commander brackets that scale pacing, interaction, and threat clocks
-- rules-aware incoming attacks with combat keywords
-- responses, counter-to-counter exchanges, and no-legal-target outcomes
-- user and opponent life totals plus commander damage per commander source
+- ordered first-strike and regular combat-damage steps with editable life, poison, commander-damage, and lifelink results
+- event-specific legal response choices, repeatable counter exchanges, and scenario-specific empty outcomes
+- user and opponent life, poison counters, and commander damage per stable primary or Partner commander identity
 - outgoing attackers and randomized block, removal, fog, or no-response outcomes
 - one active game-ending threat with a turn countdown
-- seeded event sequences, undo, history, and a same-device session draft
+- seeded event sequences, transactional undo, history, and a validated same-device version-5 session draft with legacy migration
 
-The app intentionally does not reproduce the battlefield or replace a Magic rules engine. Users resolve exact targets, blocks, and card interactions in their playtester, then record the result here.
+The app intentionally does not reproduce the battlefield or replace a Magic rules engine. Users resolve exact targets, blocks, prevention, replacement effects, and card interactions in their playtester, then record the result here. Outgoing combat records one defender per submission; reopen the form for split attacks or externally created extra combats. Commander damage remains attached to the displayed original commander identity when control changes outside the app.
 
 ## Scenario catalog
 

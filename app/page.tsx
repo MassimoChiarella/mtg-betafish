@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import {
-  applyCombatDamage,
+  buildDefaultCombatDamageSteps,
   CARD_LIBRARY,
   CARD_LIBRARY_UPDATED,
   COMMANDER_BRACKETS,
@@ -11,13 +11,15 @@ import {
   GAME_CHANGER_CARDS,
   generateEvent,
   GLOSSARY_DEFINITIONS,
-  incomingCommanderDamage,
-  incomingDamage,
+  nonnegativeSafeInteger,
   normalizeCommanderBracket,
   opponentCommanderKey,
   PROFILE_LABELS,
+  resolveCombatDamage,
   rollDefense,
   userCommanderKey,
+  type Attacker,
+  type CombatDamageStep,
   type CommanderBracket,
   type CommanderSlot,
   type DefenseResult,
@@ -25,41 +27,17 @@ import {
   type Keyword,
   type Opponent,
   type ProfileId,
+  type ResponseOption,
   type SimEvent,
-  type Threat,
 } from "./simulator";
-import { loadCardImage } from "./scryfall";
-
-type ResponseStage = "prompt" | "choose" | "counterback" | "combat" | "resolved";
-type HistoryTone = "success" | "damage" | "warning" | "neutral";
-
-type HistoryEntry = {
-  id: string;
-  turn: number;
-  title: string;
-  detail: string;
-  tone: HistoryTone;
-};
-
-type GameState = {
-  version: 4;
-  turn: number;
-  eventCounter: number;
-  defenseCounter: number;
-  seed: string;
-  opponents: Opponent[];
-  userLife: number;
-  userCommanderDamage: Record<string, number>;
-  currentEvent: SimEvent;
-  responseStage: ResponseStage;
-  resolution: string;
-  activeThreat: Threat | null;
-  recentTemplateIds: string[];
-  history: HistoryEntry[];
-  answeredCount: number;
-  combatResolvedTurn: number | null;
-  gameOver: string | null;
-};
+import {
+  decodeGameState,
+  GAME_STATE_VERSION,
+  type GameState,
+  type HistoryEntry,
+  type HistoryTone,
+} from "./session";
+import { scryfallImageUrl } from "./scryfall";
 
 type OutgoingAttacker = {
   id: string;
@@ -72,25 +50,28 @@ type OutgoingAttacker = {
 
 // Keep the legacy key so existing saved sessions survive the product rename.
 const STORAGE_KEY = "goldfish-lab-session-v1";
-const COMBAT_KEYWORDS: Keyword[] = ["Flying", "Trample", "Menace", "Deathtouch", "First strike", "Double strike", "Lifelink"];
+const COMBAT_KEYWORDS: Keyword[] = ["Flying", "Trample", "Menace", "Deathtouch", "First strike", "Double strike", "Lifelink", "Infect"];
 const USER_COMMANDER_LABELS = {
   [userCommanderKey("primary")]: "Your commander",
   [userCommanderKey("partner")]: "Your partner commander",
 };
 
 const DEFAULT_OPPONENTS: Opponent[] = [
-  { id: "mara", name: "Mara", profile: "graveyard", bracket: 3, life: 40, commanderDamage: {}, eliminated: false },
-  { id: "theo", name: "Theo", profile: "control", bracket: 4, life: 40, commanderDamage: {}, eliminated: false },
-  { id: "ari", name: "Ari", profile: "swarm", bracket: 2, life: 40, commanderDamage: {}, eliminated: false },
+  { id: "mara", name: "Mara", profile: "graveyard", bracket: 3, life: 40, poisonCounters: 0, commanderDamage: {}, eliminated: false },
+  { id: "theo", name: "Theo", profile: "control", bracket: 4, life: 40, poisonCounters: 0, commanderDamage: {}, eliminated: false },
+  { id: "ari", name: "Ari", profile: "swarm", bracket: 2, life: 40, poisonCounters: 0, commanderDamage: {}, eliminated: false },
 ];
 
-let historyEntryCounter = 0;
-
-function cloneOpponents(opponents: Opponent[]) {
-  return opponents.map((opponent) => ({ ...opponent, bracket: normalizeCommanderBracket(opponent.bracket), commanderDamage: { ...opponent.commanderDamage } }));
+function cloneOpponents(opponents: readonly Opponent[]): Opponent[] {
+  return opponents.map((opponent) => ({
+    ...opponent,
+    bracket: normalizeCommanderBracket(opponent.bracket),
+    poisonCounters: nonnegativeSafeInteger(opponent.poisonCounters) ?? 0,
+    commanderDamage: { ...opponent.commanderDamage },
+  }));
 }
 
-function createInitialGame(seed = "GILDED-732", opponents = DEFAULT_OPPONENTS): GameState {
+function createInitialGame(seed = "GILDED-732", opponents: readonly Opponent[] = DEFAULT_OPPONENTS): GameState {
   const safeOpponents = cloneOpponents(opponents);
   const currentEvent = generateEvent({
     turn: 1,
@@ -102,13 +83,14 @@ function createInitialGame(seed = "GILDED-732", opponents = DEFAULT_OPPONENTS): 
     combatResolvedTurn: null,
   });
   return {
-    version: 4,
+    version: GAME_STATE_VERSION,
     turn: 1,
     eventCounter: 1,
     defenseCounter: 0,
     seed,
     opponents: safeOpponents,
     userLife: 40,
+    userPoisonCounters: 0,
     userCommanderDamage: {},
     currentEvent,
     responseStage: "prompt",
@@ -118,21 +100,49 @@ function createInitialGame(seed = "GILDED-732", opponents = DEFAULT_OPPONENTS): 
     history: [{ id: "session-start", turn: 1, title: "Session started", detail: "The simulated table is live.", tone: "neutral" }],
     answeredCount: 0,
     combatResolvedTurn: null,
+    counterExchange: 0,
     gameOver: null,
   };
 }
 
 function historyEntry(state: GameState, title: string, detail: string, tone: HistoryTone): HistoryEntry {
-  historyEntryCounter += 1;
-  return { id: `${Date.now().toString(36)}-${historyEntryCounter.toString(36)}`, turn: state.turn, title, detail, tone };
+  return { id: crypto.randomUUID(), turn: state.turn, title, detail, tone };
 }
 
 function highestCommanderDamage(damage: Record<string, number>) {
   return Math.max(0, ...Object.values(damage));
 }
 
-function damageFromForm(data: FormData, name: string, maximum: number) {
-  return Math.min(maximum, Math.max(0, Math.floor(Number(data.get(name)) || 0)));
+function damageFromForm(data: FormData, name: string, fallback = 0) {
+  return nonnegativeSafeInteger(Number(data.get(name))) ?? fallback;
+}
+
+function addSafeInteger(value: number, delta: number) {
+  const result = value + delta;
+  if (Number.isSafeInteger(result)) return result;
+  return delta >= 0 ? Number.MAX_SAFE_INTEGER : Number.MIN_SAFE_INTEGER;
+}
+
+function damageFieldName(prefix: string, step: CombatDamageStep["step"], field: "life" | "poison" | "lifelink" | "commander", commanderId = "") {
+  return `${prefix}-${step}-${field}${commanderId ? `-${encodeURIComponent(commanderId)}` : ""}`;
+}
+
+function stepsFromForm(data: FormData, prefix: string, defaults: readonly CombatDamageStep[]): CombatDamageStep[] {
+  return defaults.map((step) => ({
+    step: step.step,
+    lifeDamage: damageFromForm(data, damageFieldName(prefix, step.step, "life"), step.lifeDamage),
+    poisonCounters: damageFromForm(data, damageFieldName(prefix, step.step, "poison"), step.poisonCounters),
+    lifelinkGain: damageFromForm(data, damageFieldName(prefix, step.step, "lifelink"), step.lifelinkGain),
+    commanderHits: Object.fromEntries(Object.keys(step.commanderHits).map((commanderId) => [
+      commanderId,
+      damageFromForm(data, damageFieldName(prefix, step.step, "commander", commanderId), step.commanderHits[commanderId]),
+    ])),
+  }));
+}
+
+function zeroCombatSteps(steps: readonly CombatDamageStep[]): CombatDamageStep[] {
+  const source = steps.length ? steps : [{ step: "regular" as const, lifeDamage: 0, poisonCounters: 0, lifelinkGain: 0, commanderHits: {} }];
+  return source.map((step) => ({ ...step, lifeDamage: 0, poisonCounters: 0, lifelinkGain: 0, commanderHits: Object.fromEntries(Object.keys(step.commanderHits).map((id) => [id, 0])) }));
 }
 
 function bracketLabel(value: unknown) {
@@ -150,6 +160,13 @@ const EVENT_PRESENTATION = {
   development: { label: "Signature card reveal", glyph: "…" },
 } satisfies Record<SimEvent["kind"], { label: string; glyph: string }>;
 
+const RESPONSE_PRESENTATION: Record<ResponseOption, { title: string; detail: string }> = {
+  counter: { title: "Counter it", detail: "The source may fight back." },
+  protect: { title: "Use protection", detail: "Resolve a legal protection effect in your playtester." },
+  redirect: { title: "Redirect it", detail: "Choose a new legal target." },
+  custom: { title: "Other legal answer", detail: "Record the exact line in your playtester." },
+};
+
 const GLOSSARY_MATCHES = {
   ...Object.fromEntries(Object.keys(GLOSSARY_DEFINITIONS).map((term) => [term.toLowerCase(), term as GlossaryKey])),
   countered: "Counter",
@@ -166,124 +183,46 @@ const GLOSSARY_MATCHES = {
 } as Record<string, GlossaryKey>;
 const GLOSSARY_PATTERN = new RegExp(`\\b(${Object.keys(GLOSSARY_MATCHES).sort((a, b) => b.length - a.length).join("|")})\\b`, "gi");
 
-/** Positions a hover/focus preview inside the viewport and coordinates delayed dismissal. */
-function useHoverPreview<T extends HTMLElement>(width: number, height: number, onShow?: () => void) {
-  const previewId = useId();
-  const trigger = useRef<T>(null);
-  const preview = useRef<HTMLSpanElement>(null);
-  const hoverTimer = useRef<number>(undefined);
-
-  useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
-
-  function preparePreview() {
-    window.clearTimeout(hoverTimer.current);
-    const target = trigger.current;
-    const panel = preview.current;
-    if (!target || !panel) return;
-    const rect = target.getBoundingClientRect();
-    const panelWidth = Math.min(width, window.innerWidth - 24);
-    const roomAbove = rect.top - 12;
-    const roomBelow = window.innerHeight - rect.bottom - 12;
-    const side = Math.max(roomAbove, roomBelow) < height ? "center" : roomAbove > roomBelow ? "above" : "below";
-    panel.style.left = `${Math.max(12, Math.min(window.innerWidth - panelWidth - 12, rect.left + rect.width / 2 - panelWidth / 2))}px`;
-    panel.style.top = `${side === "above" ? rect.top - 10 : side === "below" ? rect.bottom + 10 : 12}px`;
-    panel.dataset.side = side;
-    if (!panel.matches(":popover-open")) onShow?.();
-  }
-
-  function showPreview(delay = 0) {
-    window.clearTimeout(hoverTimer.current);
-    hoverTimer.current = window.setTimeout(() => {
-      preparePreview();
-      const panel = preview.current;
-      if (!panel) return;
-      if (!panel.matches(":popover-open")) panel.showPopover();
-    }, delay);
-  }
-
-  function closePreview(delay = 0) {
-    window.clearTimeout(hoverTimer.current);
-    hoverTimer.current = window.setTimeout(() => {
-      const panel = preview.current;
-      if (panel?.matches(":popover-open")) panel.hidePopover();
-    }, delay);
-  }
-
-  function keepPreviewOpen() {
-    window.clearTimeout(hoverTimer.current);
-  }
-
-  return { previewId, trigger, preview, preparePreview, showPreview, closePreview, keepPreviewOpen };
-}
-
 function CardPreview({ name, lookupName = name }: { name: string; lookupName?: string | null }) {
-  const [requestedName, setRequestedName] = useState<string>();
-  const [result, setResult] = useState<{ name: string; image: string | null }>();
+  const previewId = useId();
   const [loadedImage, setLoadedImage] = useState<string>();
   const [failedImage, setFailedImage] = useState<string>();
-  const image = result?.name === lookupName ? result.image : undefined;
-  const { previewId, trigger, preview, preparePreview, showPreview, closePreview, keepPreviewOpen } = useHoverPreview<HTMLButtonElement>(220, 320, () => {
-    if (!lookupName) return;
-    setResult((current) => current?.name === lookupName && current.image === null ? undefined : current);
-    setFailedImage((current) => current === image ? undefined : current);
-    setRequestedName(lookupName);
-  });
-
-  useEffect(() => {
-    if (!lookupName || requestedName !== lookupName || image !== undefined) return;
-    let active = true;
-    void loadCardImage(lookupName).then((url) => { if (active) setResult({ name: lookupName, image: url }); });
-    return () => { active = false; };
-  }, [image, lookupName, requestedName]);
 
   if (!lookupName) return name;
   const cardName = lookupName;
+  const image = scryfallImageUrl(cardName);
 
   return (
     <span className="card-preview">
       <button
         className="preview-trigger card-preview-trigger"
         type="button"
-        ref={trigger}
         aria-describedby={previewId}
         popoverTarget={previewId}
         popoverTargetAction="toggle"
-        onPointerEnter={(event) => { if (event.pointerType !== "touch") showPreview(160); }}
-        onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== event.currentTarget) closePreview(160); }}
-        onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) showPreview(); }}
-        onBlur={() => closePreview()}
-        onClick={preparePreview}
-        onKeyDown={(event) => { if (event.key === "Escape") closePreview(); }}
       >{name}</button>
-      <span className="preview-panel card-preview-panel" id={previewId} role="tooltip" ref={preview} popover="auto" onPointerEnter={keepPreviewOpen} onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== trigger.current) closePreview(160); }}>
-        {(image === undefined || (image && loadedImage !== image && failedImage !== image)) && <span className="card-preview-status" role="status">Loading card image…</span>}
-        {(image === null || failedImage === image) && <span className="card-preview-status" role="status">Card image unavailable.</span>}
-        {/* eslint-disable-next-line @next/next/no-img-element -- render trusted Scryfall CDN art without proxying third-party images */}
-        {image && failedImage !== image && <img className={loadedImage === image ? "" : "pending"} src={image} alt={`${cardName} card`} decoding="async" onLoad={() => setLoadedImage(image)} onError={() => setFailedImage(image)} />}
+      <span className="preview-panel card-preview-panel" id={previewId} role="tooltip" popover="auto">
+        {loadedImage !== image && failedImage !== image && <span className="card-preview-status" role="status">Loading card image…</span>}
+        {failedImage === image && <span className="card-preview-status" role="status">Card image unavailable.</span>}
+        {/* eslint-disable-next-line @next/next/no-img-element -- render the trusted Scryfall image endpoint directly */}
+        {failedImage !== image && <img className={loadedImage === image ? "" : "pending"} src={image} alt={`${cardName} card`} decoding="async" loading="lazy" onLoad={() => setLoadedImage(image)} onError={() => setFailedImage(image)} />}
       </span>
     </span>
   );
 }
 
 function GlossaryTerm({ term, children = term, className = "" }: { term: GlossaryKey; children?: React.ReactNode; className?: string }) {
-  const { previewId, trigger, preview, preparePreview, showPreview, closePreview, keepPreviewOpen } = useHoverPreview<HTMLButtonElement>(260, 140);
+  const previewId = useId();
   return (
     <span className={`glossary-preview${className ? ` ${className}` : ""}`}>
       <button
         className="preview-trigger glossary-preview-trigger"
         type="button"
-        ref={trigger}
         aria-describedby={previewId}
         popoverTarget={previewId}
         popoverTargetAction="toggle"
-        onPointerEnter={(event) => { if (event.pointerType !== "touch") showPreview(160); }}
-        onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== event.currentTarget) closePreview(160); }}
-        onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) showPreview(); }}
-        onBlur={() => closePreview()}
-        onClick={preparePreview}
-        onKeyDown={(event) => { if (event.key === "Escape") closePreview(); }}
       >{children}</button>
-      <span className="preview-panel glossary-preview-panel" id={previewId} role="tooltip" ref={preview} popover="auto" onPointerEnter={keepPreviewOpen} onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== trigger.current) closePreview(160); }}>
+      <span className="preview-panel glossary-preview-panel" id={previewId} role="tooltip" popover="auto">
         {GLOSSARY_DEFINITIONS[term]}
       </span>
     </span>
@@ -296,23 +235,17 @@ function GlossaryExplanation({ terms }: { terms: readonly GlossaryKey[] }) {
 }
 
 function GlossaryHelp({ terms, label = "Rules help" }: { terms: readonly GlossaryKey[]; label?: string }) {
-  const { previewId, trigger, preview, preparePreview, showPreview, closePreview, keepPreviewOpen } = useHoverPreview<HTMLButtonElement>(260, 320);
+  const previewId = useId();
   return (
     <span className="glossary-help">
       <button
         className="preview-trigger glossary-help-trigger"
         type="button"
-        ref={trigger}
         aria-describedby={previewId}
         popoverTarget={previewId}
         popoverTargetAction="toggle"
-        onPointerEnter={(event) => { if (event.pointerType !== "touch") showPreview(160); }}
-        onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== event.currentTarget) closePreview(160); }}
-        onBlur={() => closePreview()}
-        onClick={preparePreview}
-        onKeyDown={(event) => { if (event.key === "Escape") closePreview(); }}
       ><span aria-hidden="true">?</span> {label}</button>
-      <span className="preview-panel glossary-preview-panel" id={previewId} role="tooltip" ref={preview} popover="auto" onPointerEnter={keepPreviewOpen} onPointerLeave={(event) => { if (event.pointerType !== "touch" && document.activeElement !== trigger.current) closePreview(160); }}>
+      <span className="preview-panel glossary-preview-panel" id={previewId} role="tooltip" popover="auto">
         <GlossaryExplanation terms={terms} />
       </span>
     </span>
@@ -341,29 +274,25 @@ function Modal({ title, subtitle, onClose, children, wide = false, dismissible =
   dismissible?: boolean;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const onCloseRef = useRef(onClose);
-
-  useEffect(() => {
-    onCloseRef.current = onClose;
-  }, [onClose]);
+  const titleId = useId();
+  const descriptionId = useId();
+  const handleCancel = useEffectEvent((event: Event) => { event.preventDefault(); if (dismissible) onClose(); });
 
   useEffect(() => {
     const modal = dialog.current;
     const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const handleCancel = (event: Event) => { event.preventDefault(); if (dismissible) onCloseRef.current(); };
-    modal?.addEventListener("cancel", handleCancel);
+    if (modal) modal.oncancel = handleCancel;
     if (modal && !modal.open) modal.showModal();
     return () => {
-      modal?.removeEventListener("cancel", handleCancel);
       if (modal?.open) modal.close();
       returnFocus?.focus();
     };
-  }, [dismissible]);
+  }, []);
 
   return (
-    <dialog ref={dialog} className={`modal ${wide ? "modal-wide" : ""}`} aria-labelledby="modal-title" aria-describedby={subtitle ? "modal-description" : undefined}>
+    <dialog ref={dialog} className={`modal ${wide ? "modal-wide" : ""}`} aria-labelledby={titleId} aria-describedby={subtitle ? descriptionId : undefined}>
       <header className="modal-header">
-        <div><span className="eyebrow">MTG Betafish</span><h2 id="modal-title">{title}</h2>{subtitle && <p id="modal-description">{subtitle}</p>}</div>
+        <div><span className="eyebrow">MTG Betafish</span><h2 id={titleId}>{title}</h2>{subtitle && <p id={descriptionId}>{subtitle}</p>}</div>
         {dismissible && <button className="icon-button" type="button" onClick={onClose} aria-label={`Close ${title}`}>×</button>}
       </header>
       {children}
@@ -385,8 +314,37 @@ function CommanderLedger({ damage, labels = {}, dark = false }: { damage: Record
   );
 }
 
+function CombatDamageFields({
+  prefix,
+  steps,
+  commanderLabels,
+}: {
+  prefix: string;
+  steps: readonly CombatDamageStep[];
+  commanderLabels: Record<string, string>;
+}) {
+  return (
+    <div className="damage-steps">
+      {steps.map((step) => (
+        <fieldset className="damage-step" key={step.step}>
+          <legend>{step.step === "first" ? "First-strike combat damage step" : "Regular combat damage step"}</legend>
+          <div className="damage-inputs">
+            <label>Life damage<input name={damageFieldName(prefix, step.step, "life")} type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" defaultValue={step.lifeDamage} /></label>
+            <label>Poison counters added<input name={damageFieldName(prefix, step.step, "poison")} type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" defaultValue={step.poisonCounters} /></label>
+            {Object.entries(step.commanderHits).map(([commanderId, damage]) => (
+              <label key={commanderId}>{commanderLabels[commanderId] ?? commanderId} damage<input name={damageFieldName(prefix, step.step, "commander", commanderId)} type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" defaultValue={damage} /></label>
+            ))}
+            <label>Lifelink life gained<input name={damageFieldName(prefix, step.step, "lifelink")} type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" defaultValue={step.lifelinkGain} /></label>
+          </div>
+        </fieldset>
+      ))}
+    </div>
+  );
+}
+
 export default function Home() {
   const [game, setGame] = useState<GameState>(() => createInitialGame());
+  const gameRef = useRef(game);
   const [hydrated, setHydrated] = useState(false);
   const undoStack = useRef<GameState[]>([]);
   const encounterHeading = useRef<HTMLHeadingElement>(null);
@@ -412,34 +370,22 @@ export default function Home() {
   const [attackerCommanderSlot, setAttackerCommanderSlot] = useState<CommanderSlot>("primary");
   const [attackerKeywords, setAttackerKeywords] = useState<Keyword[]>([]);
   const [defense, setDefense] = useState<DefenseResult | null>(null);
+  const [defenseRollCounter, setDefenseRollCounter] = useState(0);
+  const [defenseAnswered, setDefenseAnswered] = useState(false);
+
+  useEffect(() => {
+    gameRef.current = game;
+  }, [game]);
 
   // Persistence is best-effort: private browsing and storage policies may disable it.
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved) as Omit<GameState, "version" | "answeredCount" | "combatResolvedTurn"> & { version: number; answeredCount?: number; combatResolvedTurn?: number | null };
-        if ([1, 2, 3, 4].includes(parsed.version) && parsed.currentEvent && Array.isArray(parsed.opponents)) {
-          const history = Array.isArray(parsed.history) ? parsed.history : [];
-          const migratedAnsweredCount = history.filter((entry) => ["Action answered", "Threat answered", "Combat prevented"].includes(entry.title)).length;
-          const migratedCombatResolvedTurn = history.some((entry) => entry.turn === parsed.turn && ["Attack connected", "Combat prevented", "Combat resolved"].includes(entry.title))
-            ? parsed.turn
-            : null;
-          const savedCombatResolvedTurn = parsed.combatResolvedTurn === null
-            ? null
-            : typeof parsed.combatResolvedTurn === "number" && Number.isInteger(parsed.combatResolvedTurn) && parsed.combatResolvedTurn >= 1 && parsed.combatResolvedTurn <= parsed.turn
-              ? parsed.combatResolvedTurn
-              : undefined;
-          // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate client-only persisted state after mount
-          setGame({
-            ...parsed,
-            version: 4,
-            opponents: cloneOpponents(parsed.opponents),
-            history,
-            answeredCount: Number.isFinite(parsed.answeredCount) ? Math.max(0, Math.floor(parsed.answeredCount ?? 0)) : migratedAnsweredCount,
-            combatResolvedTurn: parsed.version === 4 && savedCombatResolvedTurn !== undefined ? savedCombatResolvedTurn : migratedCombatResolvedTurn,
-          });
-        }
+        const decoded = decodeGameState(JSON.parse(saved));
+        if (!decoded) window.localStorage.removeItem(STORAGE_KEY);
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate client-only persisted state after mount
+        else setGame(decoded);
       }
     } catch {
       try { window.localStorage.removeItem(STORAGE_KEY); } catch { /* Storage may be unavailable. */ }
@@ -468,22 +414,32 @@ export default function Home() {
 
   // Keep ten reversible game states in memory; local storage only persists the current state.
   function commit(update: (previous: GameState) => GameState) {
-    undoStack.current = [...undoStack.current.slice(-9), game];
-    setGame(update(game));
+    const previous = gameRef.current;
+    const next = update(previous);
+    undoStack.current = [...undoStack.current.slice(-9), previous];
+    gameRef.current = next;
+    setGame(next);
   }
 
   const sourceOpponent = game.opponents.find((opponent) => opponent.id === game.currentEvent.sourceId);
-  const incomingTotal = game.currentEvent.attackers ? incomingDamage(game.currentEvent.attackers) : 0;
-  const incomingCommanderTotal = game.currentEvent.attackers ? incomingCommanderDamage(game.currentEvent.attackers) : 0;
-  const incomingRegularTotal = Math.max(0, incomingTotal - incomingCommanderTotal);
-  const incomingLifelinkTotal = game.currentEvent.attackers?.filter((attacker) => attacker.keywords.includes("Lifelink")).reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0) ?? 0;
+  const incomingDamageSteps = game.currentEvent.attackers
+    ? buildDefaultCombatDamageSteps(game.currentEvent.attackers)
+    : [];
+  const incomingLifeTotal = incomingDamageSteps.reduce((sum, step) => addSafeInteger(sum, step.lifeDamage), 0);
+  const incomingPoisonTotal = incomingDamageSteps.reduce((sum, step) => addSafeInteger(sum, step.poisonCounters), 0);
+  const incomingCommanderTotal = incomingDamageSteps.reduce((sum, step) => addSafeInteger(sum, Object.values(step.commanderHits).reduce((subtotal, damage) => addSafeInteger(subtotal, damage), 0)), 0);
+  const incomingLifelinkTotal = incomingDamageSteps.reduce((sum, step) => addSafeInteger(sum, step.lifelinkGain), 0);
+  const incomingCommanderLabels = Object.fromEntries((game.currentEvent.attackers ?? [])
+    .filter((attacker) => attacker.isCommander && attacker.commanderId)
+    .map((attacker) => [attacker.commanderId as string, attacker.commanderLabel ?? attacker.name]));
   const livingOpponents = game.opponents.filter((opponent) => !opponent.eliminated);
+  const canCounterAgain = game.currentEvent.responseOptions.includes("counter");
 
   function resolveEvent(title: string, detail: string, tone: HistoryTone, patch: Partial<GameState> = {}, answered = false) {
     commit((previous) => ({
       ...previous,
       ...patch,
-      answeredCount: previous.answeredCount + Number(answered),
+      answeredCount: addSafeInteger(previous.answeredCount, Number(answered)),
       responseStage: "resolved",
       resolution: detail,
       history: [historyEntry(previous, title, detail, tone), ...previous.history].slice(0, 40),
@@ -501,66 +457,100 @@ export default function Home() {
       resolveEvent("Threat established", `${event.sourceName}’s ${event.card} is now on a ${event.threat.remaining}-turn clock.`, "warning", { activeThreat: event.threat });
       return;
     }
-    resolveEvent(`${event.card} resolves`, "Apply the generated outcome in your playtester, then advance the table.", event.kind === "wipe" ? "warning" : "damage");
+    resolveEvent("Table action resolves", `${event.card}: apply the generated outcome in your playtester, then advance the table.`, event.kind === "wipe" ? "warning" : "damage");
   }
 
-  function answerEvent(answer: "counter" | "protect" | "redirect" | "custom" | "counter-again") {
+  function answerEvent(answer: ResponseOption) {
     const event = game.currentEvent;
-    if ((answer === "counter" || answer === "counter-again") && game.responseStage !== "counterback") {
+    if ((game.responseStage !== "choose" && game.responseStage !== "counterback") || !event.responseOptions.includes(answer)) return;
+    if (answer === "counter") {
       const profile = sourceOpponent?.profile ?? "midrange";
       const bracket = normalizeCommanderBracket(sourceOpponent?.bracket);
-      if (counterBacks({ profile, bracket, seed: game.seed, turn: game.turn, counter: game.history.length })) {
+      const counterExchange = addSafeInteger(game.counterExchange, 1);
+      if (counterBacks({
+        profile,
+        bracket,
+        seed: game.seed,
+        turn: game.turn,
+        eventCounter: game.eventCounter,
+        exchange: counterExchange,
+      })) {
         commit((previous) => ({
           ...previous,
           responseStage: "counterback",
-          resolution: "Your counter is countered. You have one final response window.",
-          history: [historyEntry(previous, "Counter war", `${event.sourceName} counters your counter.`, "warning"), ...previous.history].slice(0, 40),
+          counterExchange,
+          resolution: "Your counter is countered. The response window remains open.",
+          history: [historyEntry(previous, "Counter exchange", `${event.sourceName} counters your answer in exchange ${counterExchange}.`, "warning"), ...previous.history].slice(0, 40),
         }));
         return;
       }
+      resolveEvent("Action answered", "Your counter resolves and stops the table action.", "success", { counterExchange }, true);
+      return;
     }
-    const labels = {
-      counter: "You countered the action.",
-      "counter-again": "Your second answer wins the counter war.",
-      protect: "Your protection effect saves the threatened cards.",
+    const labels: Record<Exclude<ResponseOption, "counter">, string> = {
+      protect: "Resolve the legal protection effect you used in your playtester.",
       redirect: "You changed the target; apply the new target in your playtester.",
-      custom: "You supplied a legal answer and stopped the generated action.",
+      custom: "You supplied another legal answer; apply its exact result in your playtester.",
     };
     resolveEvent("Action answered", labels[answer], "success", {}, true);
   }
 
-  function applyIncoming(regularDamage: number, commanderDamage: number, label: string, lifelinkDamage = 0, answered = false) {
-    const commanderName = game.currentEvent.attackers?.find((attacker) => attacker.isCommander)?.name ?? `${game.currentEvent.sourceName}’s commander`;
-    const commanderId = opponentCommanderKey(game.currentEvent.sourceId);
-    const result = applyCombatDamage({
-      life: game.userLife,
-      commanderDamage: game.userCommanderDamage,
-      regularDamage,
-      commanderHits: commanderDamage > 0 ? { [commanderId]: commanderDamage } : {},
+  function applyIncoming(steps: readonly CombatDamageStep[], label: string, answered = false, lossPrevented = false) {
+    commit((previous) => {
+      const result = resolveCombatDamage({
+        state: {
+          life: previous.userLife,
+          poisonCounters: previous.userPoisonCounters,
+          commanderDamage: previous.userCommanderDamage,
+        },
+        steps,
+        lossPrevented,
+      });
+      const commanderDamage = result.stepsApplied.reduce((total, stepName) => {
+        const step = steps.find((candidate) => candidate.step === stepName);
+        return addSafeInteger(total, Object.values(step?.commanderHits ?? {}).reduce((subtotal, damage) => addSafeInteger(subtotal, damage), 0));
+      }, 0);
+      const sourceName = previous.currentEvent.sourceName;
+      const opponents = previous.opponents.map((opponent) => opponent.id === previous.currentEvent.sourceId
+        ? { ...opponent, life: addSafeInteger(opponent.life, result.lifelinkGain) }
+        : opponent);
+      const lossReason = result.lossReason === "life"
+        ? `You reached ${result.life} life after ${sourceName}’s attack`
+        : result.lossReason === "poison"
+          ? `You reached ${result.poisonCounters} poison counters`
+          : result.lossReason === "commander"
+            ? `${incomingCommanderLabels[result.lethalCommander ?? ""] ?? result.lethalCommander ?? "A commander"} reached 21 commander damage`
+            : null;
+      const parts = [
+        `${result.stepsApplied.map((step) => step === "first" ? "first-strike" : "regular").join(" and ") || "no"} damage step${result.stepsApplied.length === 1 ? "" : "s"} applied`,
+        `${result.lifeDamage} life damage`,
+        `${result.poisonAdded} poison`,
+        `${commanderDamage} commander damage`,
+        `${sourceName} gained ${result.lifelinkGain} life from lifelink`,
+      ];
+      if (lossPrevented) parts.push("a stated rule or effect prevented the normal loss for this resolution");
+      if (lossReason) parts.push(lossReason);
+      const detail = `${parts.join("; ")}.`;
+      return {
+        ...previous,
+        userLife: result.life,
+        userPoisonCounters: result.poisonCounters,
+        userCommanderDamage: result.commanderDamage,
+        opponents,
+        gameOver: result.defeated && lossReason ? `${lossReason}.` : previous.gameOver,
+        combatResolvedTurn: previous.turn,
+        answeredCount: addSafeInteger(previous.answeredCount, Number(answered)),
+        responseStage: "resolved",
+        resolution: detail,
+        history: [historyEntry(previous, label, detail, result.lifeDamage || result.poisonAdded || commanderDamage ? "damage" : "success"), ...previous.history].slice(0, 40),
+      };
     });
-    const gameOver = result.defeated
-      ? result.life <= 0
-        ? `You reached ${result.life} life after ${game.currentEvent.sourceName}’s attack.`
-        : `${commanderName} dealt 21 or more commander damage to you.`
-      : null;
-    const lifelinkGain = Math.min(result.totalDamage, Math.max(0, lifelinkDamage));
-    const opponents = game.opponents.map((opponent) => opponent.id === game.currentEvent.sourceId ? { ...opponent, life: opponent.life + lifelinkGain } : opponent);
-    resolveEvent(
-      label,
-      result.totalDamage === 0 ? "No combat damage reached you." : `${result.totalDamage} combat damage reached you${commanderDamage ? `, including ${commanderDamage} commander damage` : ""}${lifelinkGain ? `; ${game.currentEvent.sourceName} gained ${lifelinkGain} life` : ""}.`,
-      result.totalDamage ? "damage" : "success",
-      { userLife: result.life, userCommanderDamage: result.commanderDamage, opponents, gameOver, combatResolvedTurn: game.turn },
-      answered,
-    );
   }
 
   function submitIncomingDamage(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    const regularDamage = damageFromForm(data, "incoming-regular", incomingRegularTotal);
-    const commanderDamage = damageFromForm(data, "incoming-commander", incomingCommanderTotal);
-    const lifelinkDamage = damageFromForm(data, "incoming-lifelink", incomingLifelinkTotal);
-    applyIncoming(regularDamage, commanderDamage, "Combat resolved", lifelinkDamage);
+    applyIncoming(stepsFromForm(data, "incoming", incomingDamageSteps), "Combat resolved", false, data.get("incoming-loss-prevented") === "on");
   }
 
   function advanceTurn() {
@@ -568,13 +558,14 @@ export default function Home() {
       if (previous.opponents.every((opponent) => opponent.eliminated)) {
         return { ...previous, gameOver: "You eliminated every simulated opponent." };
       }
-      const turn = previous.turn + 1;
+      const turn = addSafeInteger(previous.turn, 1);
       let activeThreat = previous.activeThreat;
       if (activeThreat) {
-        activeThreat = { ...activeThreat, remaining: activeThreat.remaining - 1 };
+        activeThreat = { ...activeThreat, remaining: Math.max(0, addSafeInteger(activeThreat.remaining, -1)) };
         if (activeThreat.remaining <= 0) {
           const owner = previous.opponents.find((opponent) => opponent.id === activeThreat?.ownerId);
-          const reason = `${owner?.name ?? "An opponent"} completes ${activeThreat.title}. The unresolved threat wins the simulated game.`;
+          const threatTitle = activeThreat.title.replace(/[.!?]+$/, "");
+          const reason = `${owner?.name ?? "An opponent"} completes ${threatTitle}. The unresolved threat wins the simulated game.`;
           return {
             ...previous,
             turn,
@@ -585,7 +576,7 @@ export default function Home() {
         }
       }
       const recentTemplateIds = [previous.currentEvent.templateId, ...previous.recentTemplateIds].slice(0, 3);
-      const eventCounter = previous.eventCounter + 1;
+      const eventCounter = addSafeInteger(previous.eventCounter, 1);
       const currentEvent = generateEvent({
         turn,
         counter: eventCounter,
@@ -602,6 +593,7 @@ export default function Home() {
         currentEvent,
         responseStage: "prompt",
         resolution: "",
+        counterExchange: 0,
         activeThreat,
         recentTemplateIds,
       };
@@ -612,7 +604,7 @@ export default function Home() {
     setGame((previous) => {
       if (!previous.activeThreat || previous.activeThreat.remaining > 0) return { ...previous, gameOver: null };
       const recentTemplateIds = [previous.currentEvent.templateId, ...previous.recentTemplateIds].slice(0, 3);
-      const eventCounter = previous.eventCounter + 1;
+      const eventCounter = addSafeInteger(previous.eventCounter, 1);
       return {
         ...previous,
         gameOver: null,
@@ -630,23 +622,32 @@ export default function Home() {
         }),
         responseStage: "prompt",
         resolution: "",
+        counterExchange: 0,
       };
     });
   }
 
-  function adjustLife(target: "user" | string, amount: number) {
+  function adjustPlayerStat(target: "user" | string, stat: "life" | "poison", amount: number) {
     commit((previous) => {
       if (target === "user") {
-        const userLife = previous.userLife + amount;
-        return { ...previous, userLife, gameOver: userLife <= 0 ? `You reached ${userLife} life.` : previous.gameOver };
+        if (stat === "life") {
+          const userLife = addSafeInteger(previous.userLife, amount);
+          return { ...previous, userLife, gameOver: userLife <= 0 ? `You reached ${userLife} life.` : previous.gameOver };
+        }
+        const userPoisonCounters = Math.max(0, addSafeInteger(previous.userPoisonCounters, amount));
+        return { ...previous, userPoisonCounters, gameOver: userPoisonCounters >= 10 ? `You reached ${userPoisonCounters} poison counters.` : previous.gameOver };
       }
+
       const opponents = previous.opponents.map((opponent) => {
         if (opponent.id !== target) return opponent;
-        const life = opponent.life + amount;
+        const life = stat === "life" ? addSafeInteger(opponent.life, amount) : opponent.life;
+        const poisonCounters = stat === "poison" ? Math.max(0, addSafeInteger(opponent.poisonCounters, amount)) : opponent.poisonCounters;
         const commanderDefeated = Object.values(opponent.commanderDamage).some((damage) => damage >= 21);
-        return { ...opponent, life, eliminated: opponent.eliminated || life <= 0 || commanderDefeated };
+        const defeated = stat === "life" ? life <= 0 || poisonCounters >= 10 || commanderDefeated : poisonCounters >= 10;
+        return { ...opponent, life, poisonCounters, eliminated: opponent.eliminated || defeated };
       });
-      const activeThreat = previous.activeThreat?.ownerId === target && opponents.find((opponent) => opponent.id === target)?.eliminated ? null : previous.activeThreat;
+      const targetEliminated = opponents.find((opponent) => opponent.id === target)?.eliminated;
+      const activeThreat = targetEliminated && previous.activeThreat?.ownerId === target ? null : previous.activeThreat;
       const tableDefeated = opponents.every((opponent) => opponent.eliminated);
       const sourceEliminated = previous.responseStage !== "resolved" && opponents.some((opponent) => opponent.id === previous.currentEvent.sourceId && opponent.eliminated);
       const sourceResolution = `${previous.currentEvent.sourceName} left the game, so their pending action was removed from the stack or combat.`;
@@ -664,13 +665,21 @@ export default function Home() {
     });
   }
 
+  function adjustLife(target: "user" | string, amount: number) {
+    adjustPlayerStat(target, "life", amount);
+  }
+
+  function adjustPoison(target: "user" | string, amount: number) {
+    adjustPlayerStat(target, "poison", amount);
+  }
+
   function stopThreat() {
     if (!game.activeThreat) return;
     commit((previous) => ({
       ...previous,
       activeThreat: null,
-      answeredCount: previous.answeredCount + 1,
-      history: [historyEntry(previous, "Threat answered", `${previous.activeThreat?.title ?? "The active threat"} is no longer threatening the table.`, "success"), ...previous.history].slice(0, 40),
+      answeredCount: addSafeInteger(previous.answeredCount, 1),
+      history: [historyEntry(previous, "Threat answered", `${previous.activeThreat?.title.replace(/[.!?]+$/, "") ?? "The active threat"} is no longer threatening the table.`, "success"), ...previous.history].slice(0, 40),
     }));
     requestAnimationFrame(() => threatHeading.current?.focus());
   }
@@ -679,7 +688,7 @@ export default function Home() {
     if (!game.activeThreat || game.activeThreat.delayed) return;
     commit((previous) => ({
       ...previous,
-      activeThreat: previous.activeThreat ? { ...previous.activeThreat, remaining: previous.activeThreat.remaining + 1, delayed: true } : null,
+      activeThreat: previous.activeThreat ? { ...previous.activeThreat, remaining: addSafeInteger(previous.activeThreat.remaining, 1), delayed: true } : null,
       history: [historyEntry(previous, "Threat delayed", "You bought one additional turn.", "success"), ...previous.history].slice(0, 40),
     }));
     requestAnimationFrame(() => threatAnswerButton.current?.focus());
@@ -696,7 +705,7 @@ export default function Home() {
   }
 
   function addSettingsOpponent() {
-    setSettingsOpponents((current) => current.length >= 3 ? current : [...current, { id: `opponent-${Date.now()}`, name: `Opponent ${current.length + 1}`, profile: "midrange", bracket: 3, life: 40, commanderDamage: {}, eliminated: false }]);
+    setSettingsOpponents((current) => current.length >= 3 ? current : [...current, { id: crypto.randomUUID(), name: `Opponent ${current.length + 1}`, profile: "midrange", bracket: 3, life: 40, poisonCounters: 0, commanderDamage: {}, eliminated: false }]);
     requestAnimationFrame(() => {
       const inputs = settingsPanel.current?.querySelectorAll<HTMLInputElement>(".opponent-setting input");
       inputs?.[inputs.length - 1]?.focus();
@@ -729,7 +738,7 @@ export default function Home() {
       const history = [historyEntry(previous, "Table updated", "Opponent deck profiles and Commander brackets changed.", "neutral"), ...previous.history].slice(0, 40);
       const isFollowUp = previous.responseStage === "resolved";
       const recentTemplateIds = isFollowUp ? [previous.currentEvent.templateId, ...previous.recentTemplateIds].slice(0, 3) : previous.recentTemplateIds;
-      const eventCounter = previous.eventCounter + 1;
+      const eventCounter = addSafeInteger(previous.eventCounter, 1);
       const generatedEvent = generateEvent({
         turn: previous.turn,
         counter: eventCounter,
@@ -750,6 +759,7 @@ export default function Home() {
         currentEvent,
         responseStage: "prompt",
         resolution: "",
+        counterExchange: 0,
         activeThreat,
         recentTemplateIds,
         history,
@@ -768,15 +778,19 @@ export default function Home() {
     setAttackerCommanderSlot("primary");
     setAttackerKeywords([]);
     setDefense(null);
+    setDefenseRollCounter(game.defenseCounter);
+    setDefenseAnswered(false);
     setActiveModal("combat");
   }
 
   function addOutgoingAttacker(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const power = nonnegativeSafeInteger(attackerPower);
+    if (power === null) return;
     const attacker: OutgoingAttacker = {
-      id: `attacker-${Date.now()}-${outgoingAttackers.length}`,
+      id: crypto.randomUUID(),
       name: attackerName.trim() || (attackerCommander ? "Your commander" : `Attacker ${outgoingAttackers.length + 1}`),
-      power: Math.max(0, Math.floor(attackerPower || 0)),
+      power,
       isCommander: attackerCommander,
       commanderSlot: attackerCommander ? attackerCommanderSlot : undefined,
       keywords: attackerKeywords,
@@ -787,12 +801,14 @@ export default function Home() {
     setAttackerCommander(false);
     setAttackerKeywords([]);
     setDefense(null);
+    setDefenseAnswered(false);
     requestAnimationFrame(() => attackerNameInput.current?.focus());
   }
 
   function removeOutgoingAttacker(id: string, index: number) {
     setOutgoingAttackers((current) => current.filter((attacker) => attacker.id !== id));
     setDefense(null);
+    setDefenseAnswered(false);
     requestAnimationFrame(() => {
       const buttons = outgoingList.current?.querySelectorAll<HTMLButtonElement>("article > button");
       const nextButton = buttons?.[Math.min(index, buttons.length - 1)];
@@ -801,35 +817,36 @@ export default function Home() {
     });
   }
 
-  function fullCombatDamage(attackers: OutgoingAttacker[], ignoredId?: string) {
-    const regular = attackers.filter((attacker) => !attacker.isCommander && attacker.id !== ignoredId)
-      .reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0);
-    const commander = Object.fromEntries(attackers.filter((attacker) => attacker.isCommander && attacker.id !== ignoredId)
-      .map((attacker) => [attacker.id, attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1)]));
-    const lifelink = attackers.filter((attacker) => attacker.id !== ignoredId && attacker.keywords.includes("Lifelink"))
-      .reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0);
-    return { regular, commander, lifelink };
+  function outgoingCombatAttackers(ignoredId?: string): Attacker[] {
+    return outgoingAttackers.filter((attacker) => attacker.id !== ignoredId).map((attacker) => ({
+      ...attacker,
+      toughness: attacker.power,
+      commanderId: attacker.isCommander ? userCommanderKey(attacker.commanderSlot ?? "primary") : undefined,
+      commanderLabel: attacker.isCommander ? USER_COMMANDER_LABELS[userCommanderKey(attacker.commanderSlot ?? "primary")] : undefined,
+    }));
   }
 
   function simulateDefense() {
     const target = game.opponents.find((opponent) => opponent.id === combatTarget);
     if (!target || !outgoingAttackers.length) return;
+    const nextCounter = addSafeInteger(defenseRollCounter, 1);
     const result = rollDefense({
       profile: target.profile,
       bracket: normalizeCommanderBracket(target.bracket),
       seed: game.seed,
       turn: game.turn,
-      counter: game.defenseCounter + 1,
+      counter: nextCounter,
       attackers: outgoingAttackers,
     });
     setDefense(result);
-    setGame((previous) => ({ ...previous, defenseCounter: previous.defenseCounter + 1 }));
+    setDefenseRollCounter(nextCounter);
+    setDefenseAnswered(false);
   }
 
   function answerDefense() {
     if (!defense || defense.type === "none") return;
     setDefense({ type: "none", title: "Defense answered", detail: "Your interaction stops the defensive play. Resolve combat normally." });
-    setGame((previous) => ({ ...previous, answeredCount: previous.answeredCount + 1 }));
+    setDefenseAnswered(true);
   }
 
   function applyOutgoingDamage(event: React.FormEvent<HTMLFormElement>) {
@@ -837,30 +854,40 @@ export default function Home() {
     const target = game.opponents.find((opponent) => opponent.id === combatTarget);
     if (!target || !defense) return;
     const data = new FormData(event.currentTarget);
-    const removedId = defense.type === "removal" ? [...outgoingAttackers].sort((a, b) => b.power - a.power)[0]?.id : undefined;
-    const full = defense.type === "fog" ? { regular: 0, commander: {} as Record<string, number>, lifelink: 0 } : fullCombatDamage(outgoingAttackers, removedId);
-    const commanderHits: Record<string, number> = {};
-    outgoingAttackers.filter((attacker) => attacker.isCommander).forEach((attacker) => {
-      const damage = damageFromForm(data, `commander-${attacker.id}`, full.commander[attacker.id] ?? 0);
-      const commanderId = userCommanderKey(attacker.commanderSlot ?? "primary");
-      commanderHits[commanderId] = (commanderHits[commanderId] ?? 0) + damage;
-    });
-    const regularDamage = damageFromForm(data, "outgoing-regular", full.regular);
-    const result = applyCombatDamage({ life: target.life, commanderDamage: target.commanderDamage, regularDamage, commanderHits });
-    const lifelinkGain = Math.min(damageFromForm(data, "outgoing-lifelink", full.lifelink), result.totalDamage);
+    const steps = stepsFromForm(data, "outgoing", outgoingDamageSteps);
+    const lossPrevented = data.get("outgoing-loss-prevented") === "on";
     commit((previous) => {
+      const previousTarget = previous.opponents.find((opponent) => opponent.id === target.id);
+      if (!previousTarget) return previous;
+      const result = resolveCombatDamage({
+        state: {
+          life: previousTarget.life,
+          poisonCounters: previousTarget.poisonCounters,
+          commanderDamage: previousTarget.commanderDamage,
+        },
+        steps,
+        lossPrevented,
+      });
       const opponents = previous.opponents.map((opponent) => opponent.id === target.id
-        ? { ...opponent, life: result.life, commanderDamage: result.commanderDamage, eliminated: result.defeated }
+        ? { ...opponent, life: result.life, poisonCounters: result.poisonCounters, commanderDamage: result.commanderDamage, eliminated: opponent.eliminated || result.defeated }
         : opponent);
-      const reason = result.lethalCommander ? `${USER_COMMANDER_LABELS[result.lethalCommander] ?? result.lethalCommander} reached 21 commander damage.` : result.life <= 0 ? `${target.name} reached ${result.life} life.` : "";
-      const detail = `${result.totalDamage} damage assigned to ${target.name}.${lifelinkGain ? ` You gained ${lifelinkGain} life.` : ""}${reason ? ` ${reason}` : ""}`;
+      const reason = result.lossReason === "commander"
+        ? `${USER_COMMANDER_LABELS[result.lethalCommander ?? ""] ?? result.lethalCommander} reached 21 commander damage.`
+        : result.lossReason === "poison"
+          ? `${target.name} reached ${result.poisonCounters} poison counters.`
+          : result.lossReason === "life"
+            ? `${target.name} reached ${result.life} life.`
+            : "";
+      const detail = `${result.stepsApplied.map((step) => step === "first" ? "First-strike" : "regular").join(" and ") || "No"} damage step${result.stepsApplied.length === 1 ? "" : "s"}: ${result.lifeDamage} life damage and ${result.poisonAdded} poison assigned to ${target.name}. You gained ${result.lifelinkGain} life from lifelink.${lossPrevented ? " A stated rule or effect prevented the normal loss for this resolution." : ""}${reason ? ` ${reason}` : ""}`;
       const tableDefeated = opponents.every((opponent) => opponent.eliminated);
       const sourceEliminated = result.defeated && previous.responseStage !== "resolved" && previous.currentEvent.sourceId === target.id;
       const sourceResolution = `${target.name} left the game, so their pending action was removed from the stack or combat.`;
       const damageHistory = historyEntry(previous, result.defeated ? `${target.name} eliminated` : `Damage assigned to ${target.name}`, detail, result.defeated ? "success" : "damage");
       return {
         ...previous,
-        userLife: previous.userLife + lifelinkGain,
+        userLife: addSafeInteger(previous.userLife, result.lifelinkGain),
+        defenseCounter: defenseRollCounter,
+        answeredCount: addSafeInteger(previous.answeredCount, Number(defenseAnswered)),
         opponents,
         activeThreat: result.defeated && previous.activeThreat?.ownerId === target.id ? null : previous.activeThreat,
         gameOver: tableDefeated ? "You eliminated every simulated opponent." : previous.gameOver,
@@ -873,35 +900,44 @@ export default function Home() {
 
   function undo() {
     const previous = undoStack.current.pop();
-    if (previous) setGame(previous);
+    if (previous) {
+      gameRef.current = previous;
+      setGame(previous);
+    }
   }
 
   function resetSession() {
     const seed = `CAST-${Date.now().toString(36).slice(-6).toUpperCase()}`;
     undoStack.current = [];
-    setGame(createInitialGame(seed, game.opponents.map((opponent) => ({ ...opponent, life: 40, commanderDamage: {}, eliminated: false }))));
+    const next = createInitialGame(seed, game.opponents.map((opponent) => ({ ...opponent, life: 40, poisonCounters: 0, commanderDamage: {}, eliminated: false })));
+    gameRef.current = next;
+    setGame(next);
     setActiveModal(null);
   }
 
   const maxUserCommanderDamage = highestCommanderDamage(game.userCommanderDamage);
   const tableDefeated = game.opponents.every((opponent) => opponent.eliminated);
-  const userDefeated = game.userLife <= 0 || maxUserCommanderDamage >= 21;
+  const userDefeated = game.userLife <= 0 || game.userPoisonCounters >= 10 || maxUserCommanderDamage >= 21;
   const eventCardLookup = game.currentEvent.kind === "attack" || game.currentEvent.templateId === "random-discard"
     ? null
     : game.currentEvent.card === "Thassa’s Oracle line" ? "Thassa’s Oracle" : game.currentEvent.card;
   // eslint-disable-next-line react-hooks/refs -- commit, undo, and reset pair each stack mutation with a game-state render
   const canUndo = undoStack.current.length > 0;
-  const opponentCommanderLabels = Object.fromEntries(game.opponents.map((opponent) => [opponentCommanderKey(opponent.id), `${opponent.name}’s commander`]));
+  const opponentCommanderLabels = Object.fromEntries(game.opponents.flatMap((opponent) => [
+    [opponentCommanderKey(opponent.id), `${opponent.name}’s commander`],
+    [opponentCommanderKey(opponent.id, "partner"), `${opponent.name}’s partner commander`],
+  ]));
   const removedAttackerId = defense?.type === "removal" ? [...outgoingAttackers].sort((a, b) => b.power - a.power)[0]?.id : undefined;
-  const outgoingDamageLimit = defense?.type === "fog" ? { regular: 0, commander: {} as Record<string, number>, lifelink: 0 } : fullCombatDamage(outgoingAttackers, removedAttackerId);
+  const outgoingFullDamageSteps = buildDefaultCombatDamageSteps(outgoingCombatAttackers(removedAttackerId));
+  const outgoingDamageSteps = defense?.type === "fog" ? zeroCombatSteps(outgoingFullDamageSteps) : outgoingFullDamageSteps;
   const encounterGlossaryTerms = new Set<GlossaryKey>();
   const outgoingDamageTerms: GlossaryKey[] = [];
   if (outgoingAttackers.some((attacker) => attacker.isCommander)) outgoingDamageTerms.push("Commander damage");
-  if (outgoingDamageLimit.lifelink > 0) outgoingDamageTerms.push("Lifelink");
+  if (outgoingDamageSteps.some((step) => step.lifelinkGain > 0)) outgoingDamageTerms.push("Lifelink");
   const liveMessage = (activeModal === "combat" && defense ? `Defense roll: ${defense.title}. ${defense.detail}` : null)
-    ?? (game.responseStage === "counterback" ? "Your counter was countered. Choose whether to answer again or let the original action resolve." : null)
-    ?? (game.responseStage === "choose" ? "Response choices are ready: counter, protect, redirect, or use another answer." : null)
-    ?? (game.responseStage === "combat" ? "Combat damage fields are ready. Enter the regular and commander damage that reached you." : null)
+    ?? (game.responseStage === "counterback" ? canCounterAgain ? "Your counter was countered. Choose whether to counter again or let the original action resolve." : "Your counter was countered. Let the original action resolve." : null)
+    ?? (game.responseStage === "choose" ? `Response choices are ready: ${game.currentEvent.responseOptions.join(", ")}.` : null)
+    ?? (game.responseStage === "combat" ? "Ordered combat-damage fields are ready. Record life, poison, commander damage, and lifelink for each step." : null)
     ?? (game.responseStage !== "resolved" ? `${EVENT_PRESENTATION[game.currentEvent.kind].label}: ${game.currentEvent.title}` : game.resolution);
   return (
     <main className="app-shell">
@@ -910,12 +946,12 @@ export default function Home() {
 
       <header className="topbar">
         <a className="brand" href="#main-workspace" aria-label="MTG Betafish — jump to table workspace">
-          <span><strong>MTG</strong><small>Betafish</small></span>
+          <span className="brand-title"><strong>MTG</strong><small>Betafish</small></span>
         </a>
         <div className="turn-strip" aria-label={`Turn ${game.turn}`}>
           <span className="eyebrow">Turn {game.turn}</span>
           <span className="turn-status-row">
-            <b>{game.responseStage !== "resolved" ? <>Table has <GlossaryTerm term="Priority">priority</GlossaryTerm></> : "Ready to advance"}</b>
+            <b>{game.responseStage !== "resolved" ? "Response window open" : "Ready to advance"}</b>
             {game.activeThreat && <span className={`top-threat ${game.activeThreat.remaining <= 1 ? "imminent" : ""}`}>Threat · {game.activeThreat.remaining} {game.activeThreat.remaining === 1 ? "turn" : "turns"}</span>}
           </span>
         </div>
@@ -925,14 +961,14 @@ export default function Home() {
       <section className="workspace" id="main-workspace">
         <section className="encounter-column" aria-labelledby="encounter-title">
           <div className="encounter-intro">
-            <div><span className="eyebrow">{game.responseStage !== "resolved" ? "Priority check" : "Outcome recorded"}</span><h1 id="encounter-title" ref={encounterHeading} tabIndex={-1}>{game.responseStage !== "resolved" ? "The table acts." : "Action resolved."}</h1></div>
+            <div><span className="eyebrow">{game.responseStage !== "resolved" ? "Response window" : "Outcome recorded"}</span><h1 id="encounter-title" ref={encounterHeading} tabIndex={-1}>{game.responseStage !== "resolved" ? "The table acts." : "Action resolved."}</h1></div>
             <span className="event-number">Event {String(game.eventCounter).padStart(2, "0")}</span>
           </div>
 
           <article className={`encounter-card event-${game.currentEvent.kind}`}>
             <div className="card-topline">
               <span className="event-type"><i aria-hidden="true">✦</i> {glossaryText(EVENT_PRESENTATION[game.currentEvent.kind].label, encounterGlossaryTerms)}</span>
-              <span className={game.currentEvent.kind === "threat" ? "danger-badge" : "source-badge"}>{game.currentEvent.sourceName} · <CardPreview name={game.currentEvent.card} lookupName={eventCardLookup} /></span>
+              <span className={game.currentEvent.kind === "threat" ? "danger-badge" : "source-badge"}>{game.currentEvent.sourceName} · Rules reference: <CardPreview name={game.currentEvent.card} lookupName={eventCardLookup} /></span>
             </div>
             <div className={`spell-art spell-art-${game.currentEvent.kind}`} aria-hidden="true"><span>{EVENT_PRESENTATION[game.currentEvent.kind].glyph}</span></div>
             <div className="encounter-copy">
@@ -954,7 +990,7 @@ export default function Home() {
                     </article>
                   ))}
                 </div>
-                <p className="combat-total"><strong>{incomingTotal}</strong> maximum incoming damage · <strong>{incomingCommanderTotal}</strong> <GlossaryTerm term="Commander damage">commander damage</GlossaryTerm></p>
+                <p className="combat-total"><strong>{incomingLifeTotal}</strong> life damage · <strong>{incomingPoisonTotal}</strong> poison · <strong>{incomingCommanderTotal}</strong> <GlossaryTerm term="Commander damage">commander damage</GlossaryTerm> before blocks or interaction</p>
                 </>
               )}
             </div>
@@ -964,11 +1000,9 @@ export default function Home() {
                 <div className="response-box">
                   <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>Do you have a response?</span>{game.currentEvent.kind !== "threat" && (game.currentEvent.kind === "targeted" || game.currentEvent.kind === "counter") && <GlossaryHelp terms={["Legal target"]} />}</div>
                   <div className="response-actions">
-                    <button className="primary-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "choose" }))}>Yes, I respond <span>→</span></button>
+                    <button className="primary-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "choose" }))}>Yes, I respond <span aria-hidden="true">→</span></button>
                     <button className="secondary-button" type="button" onClick={letEventResolve}>No response</button>
-                    {game.currentEvent.kind !== "threat" && (game.currentEvent.kind === "targeted" || game.currentEvent.kind === "counter"
-                      ? <button className="text-button" type="button" onClick={() => resolveEvent("Action misses", "No game object was affected, so the generated action has no effect.", "neutral")}>No legal target</button>
-                      : <button className="text-button" type="button" onClick={() => resolveEvent("Action misses", "No game object was affected, so the generated action has no effect.", "neutral")}>Nothing affected</button>)}
+                    {game.currentEvent.emptyOutcome && <button className="text-button" type="button" onClick={() => resolveEvent("No applicable object", game.currentEvent.emptyOutcome ?? "The table action had no applicable object.", "neutral")}>Action has no applicable object</button>}
                   </div>
                 </div>
               )}
@@ -977,7 +1011,7 @@ export default function Home() {
                 <div className="response-box">
                   <span className="eyebrow" ref={responseStep} tabIndex={-1}>No new pressure from this action</span>
                   <div className="response-actions">
-                    <button className="primary-button" type="button" onClick={letEventResolve}>Record development <span>→</span></button>
+                    <button className="primary-button" type="button" onClick={letEventResolve}>Record development <span aria-hidden="true">→</span></button>
                   </div>
                 </div>
               )}
@@ -985,12 +1019,7 @@ export default function Home() {
               {game.responseStage === "choose" && (
                 <div className="response-box response-choice-box">
                   <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>Choose the line you used</span><GlossaryHelp terms={["Counter", "Hexproof", "Indestructible", "Phase out", "Legal target", "Sacrifice", "Blink", "Bounce"]} /></div>
-                  <div className="choice-grid">
-                    <button type="button" onClick={() => answerEvent("counter")}><strong>Counter it</strong><small>The source may fight back.</small></button>
-                    <button type="button" onClick={() => answerEvent("protect")}><strong>Protect it</strong><small>Hexproof, indestructible, phase out.</small></button>
-                    <button type="button" onClick={() => answerEvent("redirect")}><strong>Redirect it</strong><small>Choose a new legal target.</small></button>
-                    <button type="button" onClick={() => answerEvent("custom")}><strong>Other answer</strong><small>Sacrifice, blink, bounce, or a custom line.</small></button>
-                  </div>
+                  <div className="choice-grid">{game.currentEvent.responseOptions.map((option) => <button type="button" onClick={() => answerEvent(option)} key={option}><strong>{RESPONSE_PRESENTATION[option].title}</strong><small>{RESPONSE_PRESENTATION[option].detail}</small></button>)}</div>
                   <button className="text-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "prompt" }))}>Back</button>
                 </div>
               )}
@@ -999,11 +1028,12 @@ export default function Home() {
                 <div className="response-box counterback-box">
                   <span className="danger-badge" ref={responseStep} tabIndex={-1}><GlossaryTerm term="Counter">Counter</GlossaryTerm> to your counter</span>
                   <h3>Your answer is countered.</h3>
-                  <p>You have one final response window before the original action resolves.</p>
-                  <div className="response-actions two-actions">
-                    <button className="primary-button" type="button" onClick={() => answerEvent("counter-again")}>I answer again <span>→</span></button>
+                  <p>{canCounterAgain ? "The response window remains open. Continue the exchange or let the original action resolve." : "No further counter response is listed for this action; let the original action resolve."}</p>
+                  <div className={`response-actions ${canCounterAgain ? "two-actions" : ""}`}>
+                    {canCounterAgain && <button className="primary-button" type="button" onClick={() => answerEvent("counter")}>I counter again <span aria-hidden="true">→</span></button>}
                     <button className="secondary-button" type="button" onClick={letEventResolve}>Let the original resolve</button>
                   </div>
+                  <div className="choice-grid">{game.currentEvent.responseOptions.filter((option) => option !== "counter").map((option) => <button type="button" onClick={() => answerEvent(option)} key={option}><strong>{RESPONSE_PRESENTATION[option].title}</strong><small>{RESPONSE_PRESENTATION[option].detail}</small></button>)}</div>
                 </div>
               )}
 
@@ -1011,9 +1041,9 @@ export default function Home() {
                 <div className="response-box">
                   <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>Resolve this combat</span><GlossaryHelp terms={["Fog"]} /></div>
                   <div className="response-actions combat-actions">
-                    <button className="primary-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "combat" }))}>Resolve blocks / interaction <span>→</span></button>
-                    <button className="secondary-button" type="button" onClick={() => applyIncoming(incomingRegularTotal, incomingCommanderTotal, "Attack connected", incomingLifelinkTotal)}>Take the full attack</button>
-                    <button className="text-button" type="button" onClick={() => applyIncoming(0, 0, "Combat prevented", 0, true)}>Fog / stop combat</button>
+                    <button className="primary-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "combat" }))}>Resolve blocks / interaction <span aria-hidden="true">→</span></button>
+                    <button className="secondary-button" type="button" onClick={() => applyIncoming(incomingDamageSteps, "Attack connected")}>Take the full attack</button>
+                    <button className="text-button" type="button" onClick={() => applyIncoming(zeroCombatSteps(incomingDamageSteps), "Combat prevented", true)}>Fog / stop combat</button>
                   </div>
                 </div>
               )}
@@ -1021,37 +1051,27 @@ export default function Home() {
               {game.responseStage === "combat" && (
                 <form className="response-box combat-resolution" onSubmit={submitIncomingDamage}>
                   <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>After blocks and interaction</span><GlossaryHelp terms={incomingLifelinkTotal > 0 ? ["Commander damage", "Lifelink"] : ["Commander damage"]} /></div>
-                  <p>After resolving all attackers above, enter the total damage that reaches you.</p>
-                  <div className="damage-inputs">
-                    <label>Regular combat damage<input name="incoming-regular" type="number" min="0" max={incomingRegularTotal} defaultValue="0" /></label>
-                    <label>Commander combat damage<input name="incoming-commander" type="number" min="0" max={incomingCommanderTotal} defaultValue="0" /></label>
-                    {incomingLifelinkTotal > 0 && <label>Lifelink damage dealt<input name="incoming-lifelink" type="number" min="0" max={incomingLifelinkTotal} defaultValue="0" /></label>}
-                  </div>
+                  <p>Edit the generated defaults after resolving blocks, prevention, replacement effects, and removal. Commander damage follows each displayed original identity even if another player controls that commander.</p>
+                  <CombatDamageFields prefix="incoming" steps={incomingDamageSteps} commanderLabels={incomingCommanderLabels} />
+                  <label className="check-label loss-override"><input name="incoming-loss-prevented" type="checkbox" />A rule or effect says I can’t lose this resolution; apply every step without ending the run.</label>
                   <div className="modal-actions compact-actions">
                     <button className="text-button" type="button" onClick={() => setGame((previous) => ({ ...previous, responseStage: "prompt" }))}>Back</button>
-                    <button className="primary-button" type="submit">Apply damage <span>→</span></button>
+                    <button className="primary-button" type="submit">Apply damage <span aria-hidden="true">→</span></button>
                   </div>
                 </form>
               )}
             </fieldset>
 
             {game.responseStage === "resolved" && (
-              <div className="resolved-box"><span className="resolved-mark">✓</span><div><span className="eyebrow" ref={responseStep} tabIndex={-1}>Recorded</span><strong>{game.resolution}</strong></div></div>
+              <div className="resolved-box"><span className="resolved-mark" aria-hidden="true">✓</span><div><span className="eyebrow" ref={responseStep} tabIndex={-1}>Recorded</span><strong>{game.resolution}</strong></div></div>
             )}
           </article>
-
-          <section className="mobile-turn-summary" aria-label="Turn status and shortcuts">
-            <span><small>Your life</small><strong>{game.userLife}</strong></span>
-            <span><small>Active threat</small><strong>{game.activeThreat ? `${game.activeThreat.remaining} ${game.activeThreat.remaining === 1 ? "turn" : "turns"}` : "Clear"}</strong></span>
-            <button type="button" onClick={openCombat} disabled={!livingOpponents.length} aria-label="Assign your combat damage">Assign combat <span aria-hidden="true">→</span></button>
-            <button type="button" onClick={openSettings}>Table setup</button>
-          </section>
 
           <div className="next-action">
             <div><span className="eyebrow">Up next</span><strong>{game.responseStage === "resolved" ? "Advance one full table round." : "Resolve this event, then advance the table."}</strong></div>
             <div className="next-buttons">
               <button className="undo-button" type="button" onClick={undo} disabled={!canUndo}>Undo</button>
-              <button className="advance-button" type="button" onClick={advanceTurn} disabled={game.responseStage !== "resolved" || Boolean(game.gameOver)}>Next turn <span>→</span></button>
+              <button className="advance-button" type="button" onClick={advanceTurn} disabled={game.responseStage !== "resolved" || Boolean(game.gameOver)}>Next turn <span aria-hidden="true">→</span></button>
             </div>
           </div>
         </section>
@@ -1071,6 +1091,7 @@ export default function Home() {
                   <span className="life" aria-live="polite"><b>{opponent.life}</b><small>life</small></span>
                   <button type="button" onClick={() => adjustLife(opponent.id, 1)} aria-label={`Add one life to ${opponent.name}`}>+</button>
                 </div>
+                <div className="poison-control"><button type="button" onClick={() => adjustPoison(opponent.id, -1)} aria-label={`Remove one poison counter from ${opponent.name}`}>−</button><span aria-live="polite" aria-atomic="true">Poison {opponent.poisonCounters}/10</span><button type="button" onClick={() => adjustPoison(opponent.id, 1)} aria-label={`Add one poison counter to ${opponent.name}`}>+</button></div>
               </article>
             ))}
           </div>
@@ -1082,8 +1103,9 @@ export default function Home() {
               <span className="life" aria-live="polite"><b>{game.userLife}</b><small>life</small></span>
               <button type="button" onClick={() => adjustLife("user", 1)} aria-label="Add one life to you">+</button>
             </div>
+            <div className="poison-control poison-control-dark"><button type="button" onClick={() => adjustPoison("user", -1)} aria-label="Remove one poison counter from you">−</button><span aria-live="polite" aria-atomic="true">Poison {game.userPoisonCounters}/10</span><button type="button" onClick={() => adjustPoison("user", 1)} aria-label="Add one poison counter to you">+</button></div>
           </article>
-          <button className="secondary-wide" type="button" onClick={openCombat} disabled={!livingOpponents.length}>Assign your combat damage <span>→</span></button>
+          <button className="secondary-wide" type="button" onClick={openCombat} disabled={!livingOpponents.length}>Assign your combat damage <span aria-hidden="true">→</span></button>
           <p className="rail-note">Tap attackers in your playtester, then let this table roll a defense.</p>
         </aside>
 
@@ -1103,7 +1125,7 @@ export default function Home() {
                 </div>
               </article>
             ) : (
-              <div className="empty-threat"><span>○</span><strong>No active clock</strong><p>Game-ending threat timing follows each opponent’s bracket.</p></div>
+              <div className="empty-threat"><span aria-hidden="true">○</span><strong>No active clock</strong><p>Game-ending threat timing follows each opponent’s bracket.</p></div>
             )}
           </section>
 
@@ -1111,7 +1133,7 @@ export default function Home() {
             <div className="section-heading"><div><span className="eyebrow">This session</span><h2 id="history-title">Recent events</h2></div><button className="link-button" type="button" onClick={undo} disabled={!canUndo}>Undo</button></div>
             <ol>
               {game.history.slice(0, 5).map((entry) => (
-                <li key={entry.id}><span className={`history-dot ${entry.tone}`}>{entry.tone === "success" ? "✓" : entry.tone === "warning" ? "!" : entry.tone === "damage" ? "−" : "·"}</span><div><strong>{entry.title}</strong><small>Turn {entry.turn} · {entry.detail}</small></div></li>
+                <li key={entry.id}><span className={`history-dot ${entry.tone}`} aria-hidden="true">{entry.tone === "success" ? "✓" : entry.tone === "warning" ? "!" : entry.tone === "damage" ? "−" : "·"}</span><div><strong>{entry.title}</strong><small>Turn {entry.turn} · {entry.detail}</small></div></li>
               ))}
             </ol>
           </section>
@@ -1155,23 +1177,23 @@ export default function Home() {
               <label>Session seed<input value={settingsSeed} onChange={(event) => setSettingsSeed(event.target.value.toUpperCase())} maxLength={24} /></label>
               <p>Reuse a seed with the same choices to replay the same event sequence.</p>
               <p>Before resolution, applying changes rerolls the pending action. After resolution, it generates one follow-up action this turn. If combat already occurred, the follow-up will not be another combat.</p>
-              <div className="bracket-guide"><span className="eyebrow">Bracket guide</span><strong>Official intent, Betafish-tuned odds</strong><p>MTG Betafish translates Wizards’ turn guidance into when pressure and game-ending clocks may appear. It also scales attacks, counters, removal, and defenses as simulation heuristics.</p><ol>{Object.entries(COMMANDER_BRACKETS).map(([value, rules]) => <li key={value}><b>B{value}</b><span>{rules.label}</span><small>{rules.turnGuide}</small></li>)}</ol><a href="https://magic.wizards.com/en/formats/commander" target="_blank" rel="noreferrer">View Wizards’ beta bracket guide ↗</a></div>
+              <div className="bracket-guide"><span className="eyebrow">Bracket guide</span><strong>Official intent, Betafish-tuned odds</strong><p>MTG Betafish translates Wizards’ turn guidance into when pressure and game-ending clocks may appear. It also scales attacks, counters, removal, and defenses as simulation heuristics.</p><ol>{Object.entries(COMMANDER_BRACKETS).map(([value, rules]) => <li key={value}><b>B{value}</b><span>{rules.label}</span><small>{rules.turnGuide}</small></li>)}</ol><a href="https://magic.wizards.com/en/formats/commander" target="_blank" rel="noreferrer">View Wizards’ beta bracket guide <span aria-hidden="true">↗</span></a></div>
               <p>Profiles are abstract matchup presets, not complete color-identity-checked decklists.</p>
             </div>
           </div>
-          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setActiveModal(null)}>Cancel</button><button className="primary-button" type="button" onClick={saveSettings}>{game.responseStage === "resolved" ? "Apply and generate follow-up" : "Apply and reroll"} <span>→</span></button></div>
+          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setActiveModal(null)}>Cancel</button><button className="primary-button" type="button" onClick={saveSettings}>{game.responseStage === "resolved" ? "Apply and generate follow-up" : "Apply and reroll"} <span aria-hidden="true">→</span></button></div>
         </Modal>
       )}
 
       {activeModal === "combat" && (
-        <Modal title="Assign your attack" subtitle="Add the creatures you tapped in your playtester, roll one table defense, then confirm damage." onClose={() => setActiveModal(null)} wide>
+        <Modal title="Assign your attack" subtitle="Record one defending player per submission. Reopen this form for another defender or an externally created extra combat; the simulated turn will not advance." onClose={() => setActiveModal(null)} wide>
           <div className="combat-builder">
-            <label className="target-select">Attack target<select value={combatTarget} onChange={(event) => { setCombatTarget(event.target.value); setDefense(null); }}>{livingOpponents.map((opponent) => <option value={opponent.id} key={opponent.id}>{opponent.name} · {PROFILE_LABELS[opponent.profile]} · {bracketLabel(opponent.bracket)} · {opponent.life} life</option>)}</select></label>
+            <label className="target-select">Attack target<select value={combatTarget} onChange={(event) => { setCombatTarget(event.target.value); setDefense(null); setDefenseAnswered(false); }}>{livingOpponents.map((opponent) => <option value={opponent.id} key={opponent.id}>{opponent.name} · {PROFILE_LABELS[opponent.profile]} · {bracketLabel(opponent.bracket)} · {opponent.life} life · {opponent.poisonCounters} poison</option>)}</select></label>
             <form className="attacker-form" onSubmit={addOutgoingAttacker}>
               <label>Attacker name<input ref={attackerNameInput} placeholder="e.g. Atraxa" value={attackerName} onChange={(event) => setAttackerName(event.target.value)} /></label>
-              <label>Power<input type="number" min="0" value={attackerPower} onChange={(event) => setAttackerPower(Math.max(0, Number(event.target.value)))} /></label>
+              <label>Power<input type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" value={attackerPower} onChange={(event) => setAttackerPower(nonnegativeSafeInteger(Number(event.target.value)) ?? 0)} /></label>
               <label className="check-label"><input type="checkbox" checked={attackerCommander} onChange={(event) => setAttackerCommander(event.target.checked)} />Commander</label>
-              {attackerCommander && <label>Commander identity<select value={attackerCommanderSlot} onChange={(event) => setAttackerCommanderSlot(event.target.value as CommanderSlot)}><option value="primary">Primary commander</option><option value="partner">Partner commander</option></select></label>}
+              {attackerCommander && <label>Original commander identity<select value={attackerCommanderSlot} onChange={(event) => setAttackerCommanderSlot(event.target.value as CommanderSlot)}><option value="primary">Primary commander</option><option value="partner">Partner commander</option></select><small>Commander damage follows this card’s original identity even if another player controls it.</small></label>}
               <fieldset className="keyword-picker event-fieldset"><legend className="sr-only">Attacker keywords</legend><GlossaryHelp label="Keyword help" terms={COMBAT_KEYWORDS} />{COMBAT_KEYWORDS.map((keyword) => <label key={keyword}><input type="checkbox" checked={attackerKeywords.includes(keyword)} onChange={() => setAttackerKeywords((current) => current.includes(keyword) ? current.filter((item) => item !== keyword) : [...current, keyword])} />{keyword}</label>)}</fieldset>
               <button className="secondary-button add-attacker-button" type="submit">Add attacker</button>
             </form>
@@ -1182,7 +1204,7 @@ export default function Home() {
               )) : <div className="empty-attackers">No attackers added yet.</div>}
             </div>
 
-            <button className="roll-button" type="button" onClick={simulateDefense} disabled={!outgoingAttackers.length || !combatTarget}>{defense ? "Reroll and replace current defense" : "Roll defending player’s response"} <span>↻</span></button>
+            <button className="roll-button" type="button" onClick={simulateDefense} disabled={!outgoingAttackers.length || !combatTarget}>{defense ? "Reroll and replace current defense" : "Roll defending player’s response"} <span aria-hidden="true">↻</span></button>
 
             {defense && (
               <div className={`defense-result defense-${defense.type}`} ref={defenseResult} tabIndex={-1}>
@@ -1192,25 +1214,23 @@ export default function Home() {
             )}
 
             {defense && (
-              <form className="damage-confirm" id="outgoing-damage-form" key={`${game.defenseCounter}-${defense.type}`} onSubmit={applyOutgoingDamage}>
+              <form className="damage-confirm" id="outgoing-damage-form" key={`${defenseRollCounter}-${defense.type}`} onSubmit={applyOutgoingDamage}>
                 <div className="response-heading"><span className="eyebrow">Damage that gets through</span>{outgoingDamageTerms.length > 0 && <GlossaryHelp terms={outgoingDamageTerms} />}</div>
-                <p>Override these values after resolving blocks, removal, or prevention in your playtester.</p>
-                <div className="damage-inputs">
-                  <label>Noncommander damage<input name="outgoing-regular" type="number" min="0" max={outgoingDamageLimit.regular} defaultValue={outgoingDamageLimit.regular} /></label>
-                  {outgoingAttackers.filter((attacker) => attacker.isCommander).map((attacker) => <label key={attacker.id}>{attacker.name} damage<input name={`commander-${attacker.id}`} type="number" min="0" max={outgoingDamageLimit.commander[attacker.id] ?? 0} defaultValue={outgoingDamageLimit.commander[attacker.id] ?? 0} /></label>)}
-                  {outgoingDamageLimit.lifelink > 0 && <label>Lifelink damage dealt<input name="outgoing-lifelink" type="number" min="0" max={outgoingDamageLimit.lifelink} defaultValue={outgoingDamageLimit.lifelink} /></label>}
-                </div>
+                <p>Override these defaults after resolving blocks, removal, prevention, replacement effects, and damage assignment in your playtester.</p>
+                <CombatDamageFields prefix="outgoing" steps={outgoingDamageSteps} commanderLabels={USER_COMMANDER_LABELS} />
+                <label className="check-label loss-override"><input name="outgoing-loss-prevented" type="checkbox" />A rule or effect says this defender can’t lose this resolution; apply every step without eliminating them.</label>
+                <p className="boundary-note">This submission records only {game.opponents.find((opponent) => opponent.id === combatTarget)?.name ?? "the selected defender"}. Submit other defenders or extra combats separately.</p>
               </form>
             )}
           </div>
-          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setActiveModal(null)}>Cancel</button><button className="primary-button" type="submit" form="outgoing-damage-form" disabled={!defense}>Apply damage <span>→</span></button></div>
+          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setActiveModal(null)}>Cancel</button><button className="primary-button" type="submit" form="outgoing-damage-form" disabled={!defense}>Apply damage <span aria-hidden="true">→</span></button></div>
         </Modal>
       )}
 
       {activeModal === "library" && (
-        <Modal title="Curated scenario library" subtitle="Versioned, emblematic examples flavor the simulation; generic rules-aware outcomes keep working even when the catalog is stale." onClose={() => setActiveModal(null)} wide>
+        <Modal title="Curated rules-reference library" subtitle="Versioned examples support the simulation; resolve the exact game objects and effects in your playtester." onClose={() => setActiveModal(null)} wide>
           <div className="library-grid">{CARD_LIBRARY.map((group) => <article key={group.archetype}><span className="eyebrow">Archetype</span><h3><GlossaryText text={group.archetype} /></h3><ul>{group.cards.map((card) => <li key={card}><CardPreview name={card} /></li>)}</ul></article>)}</div>
-          <div className="library-note"><strong>Library updated {CARD_LIBRARY_UPDATED}</strong><p>Scenario language follows Wizards’ definitions for <GlossaryTerm term="Counter">counter</GlossaryTerm>, <GlossaryTerm term="Destroy">destroy</GlossaryTerm>, <GlossaryTerm term="Exile">exile</GlossaryTerm>, <GlossaryTerm term="Flying">flying</GlossaryTerm>, <GlossaryTerm term="Reach">reach</GlossaryTerm>, <GlossaryTerm term="Trample">trample</GlossaryTerm>, <GlossaryTerm term="Menace">menace</GlossaryTerm>, <GlossaryTerm term="Deathtouch">deathtouch</GlossaryTerm>, <GlossaryTerm term="First strike">first strike</GlossaryTerm>, <GlossaryTerm term="Double strike">double strike</GlossaryTerm>, <GlossaryTerm term="Hexproof">hexproof</GlossaryTerm>, and <GlossaryTerm term="Indestructible">indestructible</GlossaryTerm>.</p><a href="https://magic.wizards.com/en/keyword-glossary" target="_blank" rel="noreferrer">Open the official keyword glossary ↗</a></div>
+          <div className="library-note"><strong>Rules references updated {CARD_LIBRARY_UPDATED}</strong><p>Scenario language follows Wizards’ definitions for <GlossaryTerm term="Counter">counter</GlossaryTerm>, <GlossaryTerm term="Destroy">destroy</GlossaryTerm>, <GlossaryTerm term="Exile">exile</GlossaryTerm>, <GlossaryTerm term="Flying">flying</GlossaryTerm>, <GlossaryTerm term="Reach">reach</GlossaryTerm>, <GlossaryTerm term="Trample">trample</GlossaryTerm>, <GlossaryTerm term="Menace">menace</GlossaryTerm>, <GlossaryTerm term="Deathtouch">deathtouch</GlossaryTerm>, <GlossaryTerm term="First strike">first strike</GlossaryTerm>, <GlossaryTerm term="Double strike">double strike</GlossaryTerm>, <GlossaryTerm term="Hexproof">hexproof</GlossaryTerm>, and <GlossaryTerm term="Indestructible">indestructible</GlossaryTerm>.</p><a href="https://magic.wizards.com/en/keyword-glossary" target="_blank" rel="noreferrer">Open the official keyword glossary <span aria-hidden="true">↗</span></a></div>
         </Modal>
       )}
 
@@ -1222,8 +1242,9 @@ export default function Home() {
 
       {game.gameOver && (
         <Modal title="The goldfish game ended" subtitle={game.gameOver} dismissible={!tableDefeated && !userDefeated} onClose={continueAfterGameOver}>
-          <div className="session-summary"><span><b>{game.turn}</b> turns reached</span><span><b>{game.answeredCount}</b> threats/actions answered</span><span><b>{game.userLife}</b> life remaining</span></div>
-          <div className="modal-actions">{canUndo && <button className="secondary-button" type="button" onClick={undo}>Undo last change</button>}{!tableDefeated && !userDefeated && <button className="secondary-button" type="button" onClick={continueAfterGameOver}>Continue anyway</button>}<button className="primary-button" type="button" onClick={resetSession}>Start a new run <span>→</span></button></div>
+          <div className="session-summary"><span><b>{game.turn}</b> turns reached</span><span><b>{game.answeredCount}</b> threats/actions answered</span><span><b>{game.userLife}</b> life · <b>{game.userPoisonCounters}</b> poison</span></div>
+          {userDefeated && <p className="terminal-guidance">If a rule or effect prevents this loss, undo when available and resubmit the damage with the loss-prevention override so every ordered damage step is applied.</p>}
+          <div className="modal-actions">{canUndo && <button className="secondary-button" type="button" onClick={undo}>Undo last change</button>}{!tableDefeated && !userDefeated && <button className="secondary-button" type="button" onClick={continueAfterGameOver}>Continue anyway</button>}<button className="primary-button" type="button" onClick={resetSession}>Start a new run <span aria-hidden="true">→</span></button></div>
         </Modal>
       )}
     </main>

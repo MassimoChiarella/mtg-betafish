@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  applyCombatDamage,
+  buildDefaultCombatDamageSteps,
   COMMANDER_BRACKETS,
   counterBacks,
   DECK_PROFILES,
@@ -10,10 +10,9 @@ import {
   GAME_CHANGER_CARDS,
   generateEvent,
   GLOSSARY_DEFINITIONS,
-  incomingCommanderDamage,
-  incomingDamage,
   KEYWORD_DEFINITIONS,
   normalizeCommanderBracket,
+  resolveCombatDamage,
   rollDefense,
   userCommanderKey,
 } from "../app/simulator.ts";
@@ -52,7 +51,7 @@ test("a generated attack declares one atomic attacker batch", () => {
   assert.deepEqual(new Set(attackers.map(({ id }) => id.replace(/-attacker-\d+$/, ""))), new Set([event.id]));
   assert.equal(event.title, `One declares all ${attackers.length} attackers at you.`);
   assert.match(event.prompt, /all attackers.*once/i);
-  assert.ok(event.tags.includes("Only combat this turn"));
+  assert.ok(event.tags.includes("One generated combat this turn"));
 });
 
 test("resolved combat suppresses only attack weight for that turn", () => {
@@ -155,10 +154,10 @@ test("Commander brackets increase pace and interaction without changing replayab
       const event = generateEvent({ turn: 3, counter: index, seed: `BRACKET-${index}`, opponents: source, recentTemplateIds: [], activeThreat: false });
       if (event.kind === "attack") {
         totals.attacks[bucket] += 1;
-        totals.attackDamage[bucket] += incomingDamage(event.attackers ?? []);
+        totals.attackDamage[bucket] += buildDefaultCombatDamageSteps(event.attackers ?? []).reduce((sum, step) => sum + step.lifeDamage + step.poisonCounters, 0);
       }
       if (event.kind === "threat") totals.threats[bucket] += 1;
-      if (counterBacks({ profile: "control", bracket, seed: `COUNTER-${index}`, turn: 5, counter: index })) totals.counters[bucket] += 1;
+      if (counterBacks({ profile: "control", bracket, seed: `COUNTER-${index}`, turn: 5, eventCounter: index + 1, exchange: 1 })) totals.counters[bucket] += 1;
       if (rollDefense({ profile: "control", bracket, seed: `DEFENSE-${index}`, turn: 5, counter: index, attackers }).type !== "none") totals.defenses[bucket] += 1;
     }
   }
@@ -197,9 +196,15 @@ test("lower brackets never surface Game Changer scenarios", () => {
 });
 
 test("commander damage is tracked per source and becomes lethal at 21", () => {
-  const safe = applyCombatDamage({ life: 40, commanderDamage: { A: 10, B: 10 }, regularDamage: 0, commanderHits: {} });
+  const safe = resolveCombatDamage({
+    state: { life: 40, poisonCounters: 0, commanderDamage: { A: 10, B: 10 } },
+    steps: [{ step: "regular", lifeDamage: 0, commanderHits: {}, poisonCounters: 0, lifelinkGain: 0 }],
+  });
   assert.equal(safe.defeated, false);
-  const lethal = applyCombatDamage({ life: 40, commanderDamage: { A: 18, B: 10 }, regularDamage: 2, commanderHits: { A: 3 } });
+  const lethal = resolveCombatDamage({
+    state: { life: 40, poisonCounters: 0, commanderDamage: { A: 18, B: 10 } },
+    steps: [{ step: "regular", lifeDamage: 5, commanderHits: { A: 3 }, poisonCounters: 0, lifelinkGain: 0 }],
+  });
   assert.equal(lethal.life, 35);
   assert.equal(lethal.commanderDamage.A, 21);
   assert.equal(lethal.lethalCommander, "A");
@@ -208,22 +213,28 @@ test("commander damage is tracked per source and becomes lethal at 21", () => {
 
 test("commander identities stay separate from display names and partner damage", () => {
   assert.notEqual(userCommanderKey("primary"), userCommanderKey("partner"));
-  const split = applyCombatDamage({
-    life: 40,
-    commanderDamage: {},
-    regularDamage: 0,
-    commanderHits: { [userCommanderKey("primary")]: 11, [userCommanderKey("partner")]: 11 },
+  const split = resolveCombatDamage({
+    state: { life: 40, poisonCounters: 0, commanderDamage: {} },
+    steps: [{
+      step: "regular",
+      lifeDamage: 22,
+      commanderHits: { [userCommanderKey("primary")]: 11, [userCommanderKey("partner")]: 11 },
+      poisonCounters: 0,
+      lifelinkGain: 0,
+    }],
   });
   assert.equal(split.defeated, false);
 });
 
 test("double strike counts twice for incoming and commander combat damage", () => {
+  const commanderId = "commander:a";
   const attackers = [
-    { id: "a", name: "Commander", power: 5, toughness: 5, keywords: ["Double strike"], isCommander: true },
+    { id: "a", name: "Commander", power: 5, toughness: 5, keywords: ["Double strike"], isCommander: true, commanderId },
     { id: "b", name: "Token", power: 3, toughness: 3, keywords: [], isCommander: false },
   ];
-  assert.equal(incomingDamage(attackers), 13);
-  assert.equal(incomingCommanderDamage(attackers), 10);
+  const steps = buildDefaultCombatDamageSteps(attackers);
+  assert.equal(steps.reduce((sum, step) => sum + step.lifeDamage, 0), 13);
+  assert.equal(steps.reduce((sum, step) => sum + (step.commanderHits[commanderId] ?? 0), 0), 10);
 });
 
 test("an existing countdown prevents a second threat event", () => {

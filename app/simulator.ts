@@ -5,11 +5,14 @@
 
 export type ProfileId = "midrange" | "control" | "swarm" | "voltron" | "combo" | "graveyard";
 export type EventKind = "targeted" | "wipe" | "counter" | "disruption" | "attack" | "threat" | "development";
-export type Keyword = "Flying" | "Reach" | "Trample" | "Menace" | "Vigilance" | "Deathtouch" | "First strike" | "Double strike" | "Haste" | "Lifelink";
+export type Keyword = "Flying" | "Reach" | "Trample" | "Menace" | "Vigilance" | "Deathtouch" | "First strike" | "Double strike" | "Haste" | "Lifelink" | "Infect";
 export type CommanderSlot = "primary" | "partner";
 export type CommanderBracket = 1 | 2 | 3 | 4 | 5;
+export type ResponseOption = "counter" | "protect" | "redirect" | "custom";
 
-export const opponentCommanderKey = (opponentId: string) => `opponent:${opponentId}:commander`;
+export const opponentCommanderKey = (opponentId: string, slot: CommanderSlot = "primary") => slot === "primary"
+  ? `opponent:${opponentId}:commander`
+  : `opponent:${opponentId}:partner:commander`;
 
 export const userCommanderKey = (slot: CommanderSlot) => `user:${slot}:commander`;
 
@@ -19,6 +22,7 @@ export type Opponent = {
   profile: ProfileId;
   bracket: CommanderBracket;
   life: number;
+  poisonCounters: number;
   commanderDamage: Record<string, number>;
   eliminated: boolean;
 };
@@ -30,6 +34,8 @@ export type Attacker = {
   toughness: number;
   keywords: Keyword[];
   isCommander: boolean;
+  commanderId?: string;
+  commanderLabel?: string;
 };
 
 export type Threat = {
@@ -51,6 +57,8 @@ export type SimEvent = {
   prompt: string;
   card: string;
   tags: string[];
+  responseOptions: ResponseOption[];
+  emptyOutcome?: string;
   /** Complete declaration for one combat. Normal combat is never split across events. */
   attackers?: Attacker[];
   threat?: Threat;
@@ -70,6 +78,8 @@ type EventTemplate = {
   prompt: string;
   card: string;
   tags: string[];
+  responseOptions: ResponseOption[];
+  emptyOutcome: string;
   /** Withheld from Brackets 1–2. */
   gameChanger?: boolean;
 };
@@ -80,11 +90,12 @@ export const KEYWORD_DEFINITIONS: Record<Keyword, string> = {
   Trample: "May assign excess combat damage to the defending player after lethal damage is assigned to blockers.",
   Menace: "Can’t be blocked except by two or more creatures.",
   Vigilance: "Attacking doesn’t cause this creature to tap.",
-  Deathtouch: "Any amount of damage it deals to a creature is lethal.",
+  Deathtouch: "Any nonzero amount of damage it deals to a creature is lethal.",
   "First strike": "Deals combat damage before creatures without first strike or double strike.",
   "Double strike": "Deals combat damage in both the first-strike and regular combat-damage steps.",
   Haste: "Can attack and use tap abilities immediately after coming under its controller’s control.",
   Lifelink: "Its controller gains that much life when it deals damage.",
+  Infect: "Damage to creatures is dealt as −1/−1 counters, and damage to players is dealt as poison counters instead of causing life loss.",
 };
 
 export const GLOSSARY_DEFINITIONS = {
@@ -120,11 +131,11 @@ export const COMMANDER_BRACKETS: Record<CommanderBracket, {
   earliestThreatTurn: number;
   threatClock: number;
 }> = {
-  1: { label: "Exhibition", summary: "Theme-first decks with low-pressure, showcase-focused play.", turnGuide: "Expect at least 9 turns before a player wins or loses.", turnOffset: -2, pace: .68, interaction: .55, earliestThreatTurn: 7, threatClock: 3 },
-  2: { label: "Core", summary: "Straightforward, unoptimized decks with incremental, disruptable wins.", turnGuide: "Expect at least 8 turns before a player wins or loses.", turnOffset: -1, pace: .84, interaction: .76, earliestThreatTurn: 6, threatClock: 3 },
-  3: { label: "Upgraded", summary: "Strong synergy and card quality with frequent proactive and reactive plays.", turnGuide: "Expect at least 6 turns before a player wins or loses.", turnOffset: 0, pace: 1, interaction: 1, earliestThreatTurn: 5, threatClock: 2 },
-  4: { label: "Optimized", summary: "Fast, consistent, explosive decks backed by efficient disruption.", turnGuide: "Expect at least 4 turns before a player wins or loses.", turnOffset: 2, pace: 1.2, interaction: 1.28, earliestThreatTurn: 3, threatClock: 2 },
-  5: { label: "cEDH", summary: "Metagame-tuned competitive decks with efficient wins and razor-thin margins.", turnGuide: "The game could end on any turn.", turnOffset: 4, pace: 1.38, interaction: 1.52, earliestThreatTurn: 1, threatClock: 1 },
+  1: { label: "Exhibition", summary: "Theme-first decks with low-pressure, showcase-focused play.", turnGuide: "Games are generally expected to last 9 or more turns.", turnOffset: -2, pace: .68, interaction: .55, earliestThreatTurn: 7, threatClock: 3 },
+  2: { label: "Core", summary: "Straightforward, unoptimized decks with incremental, disruptable wins.", turnGuide: "Games are generally expected to last 8 or more turns.", turnOffset: -1, pace: .84, interaction: .76, earliestThreatTurn: 6, threatClock: 3 },
+  3: { label: "Upgraded", summary: "Strong synergy and card quality with frequent proactive and reactive plays.", turnGuide: "Games are generally expected to last 6 or more turns.", turnOffset: 0, pace: 1, interaction: 1, earliestThreatTurn: 5, threatClock: 2 },
+  4: { label: "Optimized", summary: "Fast, consistent, explosive decks backed by efficient disruption.", turnGuide: "Games are generally expected to last 4 or more turns.", turnOffset: 2, pace: 1.2, interaction: 1.28, earliestThreatTurn: 3, threatClock: 2 },
+  5: { label: "cEDH", summary: "Metagame-tuned competitive decks with efficient wins and razor-thin margins.", turnGuide: "Games can end on any turn.", turnOffset: 4, pace: 1.38, interaction: 1.52, earliestThreatTurn: 1, threatClock: 1 },
 };
 
 export function normalizeCommanderBracket(value: unknown): CommanderBracket {
@@ -223,6 +234,30 @@ export const DECK_PROFILES: Record<ProfileId, {
   },
 };
 
+export type CombatDamageStep = {
+  step: "first" | "regular";
+  lifeDamage: number;
+  commanderHits: Record<string, number>;
+  poisonCounters: number;
+  lifelinkGain: number;
+};
+
+export type CombatState = {
+  life: number;
+  poisonCounters: number;
+  commanderDamage: Record<string, number>;
+};
+
+export type CombatResolution = CombatState & {
+  defeated: boolean;
+  lossReason: "life" | "poison" | "commander" | null;
+  lethalCommander: string | null;
+  stepsApplied: Array<CombatDamageStep["step"]>;
+  lifeDamage: number;
+  poisonAdded: number;
+  lifelinkGain: number;
+};
+
 /** Current Game Changers used by the bracket-specific core packages. */
 export const GAME_CHANGER_CARDS: ReadonlySet<string> = new Set([
   "Ancient Tomb", "Aura Shards", "Biorhythm", "Bolas’s Citadel", "Cyclonic Rift", "Enlightened Tutor",
@@ -244,25 +279,33 @@ export const CARD_LIBRARY = [
 ] as const;
 
 export const EVENT_TEMPLATES: EventTemplate[] = [
-  { id: "early-rock", kind: "targeted", minTurn: 1, title: "Your early mana is checked.", prompt: "Destroy your most useful mana rock or mana creature. If there is no legal target, let the table action miss.", card: "Nature’s Claim", tags: ["Destroy", "Mana"] },
-  { id: "destroy-creature", kind: "targeted", minTurn: 2, title: "Your best creature is targeted.", prompt: "Destroy your highest-power noncommander creature. Counter, protect it, or let the spell resolve.", card: "Beast Within", tags: ["Destroy", "Creature"] },
-  { id: "exile-commander", kind: "targeted", minTurn: 3, title: "Exile your commander.", prompt: "Your commander is targeted by an exile effect. If it leaves, make the normal command-zone choice in your playtester.", card: "Swords to Plowshares", tags: ["Exile", "Commander"] },
-  { id: "remove-engine", kind: "targeted", minTurn: 3, title: "Your engine is exposed.", prompt: "Exile your most important artifact or enchantment. Can you counter, protect, sacrifice, or otherwise save it?", card: "Anguished Unmaking", tags: ["Exile", "Permanent"] },
-  { id: "destroy-wipe", kind: "wipe", minTurn: 5, title: "Destroy all creatures.", prompt: "A board wipe goes on the stack. Indestructible creatures survive; can you counter it or protect your board?", card: "Wrath of God", tags: ["Board wipe", "Destroy"] },
-  { id: "minus-wipe", kind: "wipe", minTurn: 5, title: "The board gets −X/−X.", prompt: "Give each creature you control −X/−X until end of turn, where X is the greatest toughness among them. Indestructible does not stop this.", card: "Toxic Deluge", tags: ["Board wipe", "Toughness"] },
-  { id: "living-death", kind: "wipe", minTurn: 5, title: "The battlefield and graveyards trade places.", prompt: "Exile creature cards from graveyards, sacrifice creatures, then return the exiled cards. Resolve the exact Living Death sequence in your playtester.", card: "Living Death", tags: ["Board wipe", "Graveyard"] },
-  { id: "mass-bounce", kind: "wipe", minTurn: 6, title: "Return your nonlands to hand.", prompt: "Return each nonland permanent you control to its owner’s hand unless you can stop the overloaded spell.", card: "Cyclonic Rift", tags: ["Board wipe", "Bounce"], gameChanger: true },
-  { id: "exile-wipe", kind: "wipe", minTurn: 7, title: "Exile the battlefield.", prompt: "Exile creatures, artifacts, and enchantments you control. Indestructible does not prevent exile.", card: "Farewell", tags: ["Board wipe", "Exile"], gameChanger: true },
-  { id: "counter-key-spell", kind: "counter", minTurn: 2, title: "Your next key spell is countered.", prompt: "When you cast your next mana-value-4-or-greater spell this turn, the table tries to counter it.", card: "Counterspell", tags: ["Counter", "Stack"] },
-  { id: "counter-commander", kind: "counter", minTurn: 3, title: "Your commander meets permission.", prompt: "The next time you cast your commander this turn, the table tries to counter that spell.", card: "Arcane Denial", tags: ["Counter", "Commander"] },
-  { id: "random-discard", kind: "disruption", minTurn: 2, title: "Discard at random.", prompt: "Randomize the nonland cards in your hand and discard one of them.", card: "Wheel pressure", tags: ["Discard", "Hand"] },
-  { id: "graveyard-hate", kind: "disruption", minTurn: 3, title: "Exile your graveyard.", prompt: "Exile your graveyard before your next graveyard effect resolves. Can you save or use anything first?", card: "Bojuka Bog", tags: ["Exile", "Graveyard"] },
-  { id: "artifact-sweep", kind: "disruption", minTurn: 5, title: "Destroy your artifacts.", prompt: "Destroy each artifact you control. Mana rocks, Equipment, Treasures, and artifact creatures are all caught.", card: "Vandalblast", tags: ["Destroy", "Artifacts"] },
-  { id: "goad", kind: "disruption", minTurn: 4, title: "Your strongest creature is goaded.", prompt: "Your highest-power creature must attack a player other than the acting opponent next combat, if able.", card: "Disrupt Decorum", tags: ["Goad", "Combat"] },
-  { id: "combo-clock", kind: "threat", minTurn: 1, title: "A two-card win is assembling.", prompt: "A compact combo is telegraphed. Remove a piece, stop the tutor, or prepare stack interaction before the clock expires.", card: "Thassa’s Oracle line", tags: ["Game-ending", "Combo"], gameChanger: true },
-  { id: "artifact-clock", kind: "threat", minTurn: 1, title: "A lethal artifact is charging.", prompt: "An artifact engine will produce a game-ending activation when its countdown reaches zero.", card: "Aetherflux Reservoir", tags: ["Game-ending", "Artifact"] },
-  { id: "combat-clock", kind: "threat", minTurn: 1, title: "A lethal combat turn is coming.", prompt: "The creature deck is building a lethal overrun. Remove the enabler or hold up a fog before the countdown expires.", card: "Craterhoof Behemoth", tags: ["Game-ending", "Combat"] },
+  { id: "early-rock", kind: "targeted", minTurn: 1, title: "Your early mana is checked.", prompt: "Destroy an artifact or enchantment you control, prioritizing your most useful mana source. Its controller gains 4 life. If there is no legal artifact or enchantment target, the spell cannot be cast.", card: "Nature’s Claim", tags: ["Destroy", "Mana"], responseOptions: ["counter", "protect", "redirect", "custom"], emptyOutcome: "The spell could not be cast because there was no legal artifact or enchantment target." },
+  { id: "destroy-creature", kind: "targeted", minTurn: 2, title: "Your best creature is targeted.", prompt: "Destroy your highest-power noncommander creature. Its controller creates a 3/3 green Beast creature token. Counter it, resolve a legal protection effect, or let it resolve.", card: "Beast Within", tags: ["Destroy", "Creature"], responseOptions: ["counter", "protect", "redirect", "custom"], emptyOutcome: "The spell could not be cast because there was no legal permanent target." },
+  { id: "exile-commander", kind: "targeted", minTurn: 3, title: "Exile your commander.", prompt: "Your commander is targeted for exile. Its controller gains life equal to its power. If it leaves, make the normal command-zone choice in your playtester.", card: "Swords to Plowshares", tags: ["Exile", "Commander"], responseOptions: ["counter", "protect", "redirect", "custom"], emptyOutcome: "The spell could not be cast because there was no legal creature target." },
+  { id: "remove-engine", kind: "targeted", minTurn: 3, title: "Your engine is exposed.", prompt: "Exile your most important nonland permanent, then the acting opponent loses 3 life. Can you counter it or resolve another legal answer?", card: "Anguished Unmaking", tags: ["Exile", "Permanent"], responseOptions: ["counter", "protect", "redirect", "custom"], emptyOutcome: "The spell could not be cast because there was no legal nonland permanent target." },
+  { id: "destroy-wipe", kind: "wipe", minTurn: 5, title: "Destroy all creatures.", prompt: "Destroy all creatures. They can’t be regenerated. Resolve counters, indestructible, or another legal protection effect in your playtester.", card: "Wrath of God", tags: ["Board wipe", "Destroy"], responseOptions: ["counter", "protect", "custom"], emptyOutcome: "No creature you control was affected when the table action resolved." },
+  { id: "minus-wipe", kind: "wipe", minTurn: 5, title: "The board gets −X/−X.", prompt: "The acting opponent pays X life as an additional cost. Give each creature −X/−X until end of turn, where X is the greatest toughness among creatures you control. Indestructible does not stop this.", card: "Toxic Deluge", tags: ["Board wipe", "Toughness"], responseOptions: ["counter", "protect", "custom"], emptyOutcome: "No creature you control was affected when the table action resolved." },
+  { id: "living-death", kind: "wipe", minTurn: 5, title: "The battlefield and graveyards trade places.", prompt: "Exile creature cards from graveyards, sacrifice creatures, then return the exiled cards. Resolve the exact Living Death sequence in your playtester.", card: "Living Death", tags: ["Board wipe", "Graveyard"], responseOptions: ["counter", "protect", "custom"], emptyOutcome: "No creature card or creature you control changed zones during resolution." },
+  { id: "mass-bounce", kind: "wipe", minTurn: 6, title: "Return your nonlands to hand.", prompt: "Return each nonland permanent you control to its owner’s hand unless you can stop the overloaded spell.", card: "Cyclonic Rift", tags: ["Board wipe", "Bounce"], responseOptions: ["counter", "protect", "custom"], emptyOutcome: "You controlled no nonland permanent affected by the overloaded spell.", gameChanger: true },
+  { id: "exile-wipe", kind: "wipe", minTurn: 7, title: "Exile the battlefield.", prompt: "The chosen modes exile creatures, artifacts, and enchantments you control. Indestructible does not prevent exile.", card: "Farewell", tags: ["Board wipe", "Exile"], responseOptions: ["counter", "protect", "custom"], emptyOutcome: "You controlled no permanent affected by the chosen modes.", gameChanger: true },
+  { id: "counter-key-spell", kind: "counter", minTurn: 2, title: "Your next key spell is countered.", prompt: "When you cast your next mana-value-4-or-greater spell this turn, the table tries to counter it.", card: "Counterspell", tags: ["Counter", "Stack"], responseOptions: ["counter", "redirect", "custom"], emptyOutcome: "No qualifying spell was cast this turn, so no counterspell was put on the stack." },
+  { id: "counter-commander", kind: "counter", minTurn: 3, title: "Your commander meets permission.", prompt: "The next time you cast your commander this turn, the table tries to counter it. At the next turn’s upkeep, you may draw up to two cards and the acting opponent draws one card.", card: "Arcane Denial", tags: ["Counter", "Commander"], responseOptions: ["counter", "redirect", "custom"], emptyOutcome: "No commander spell was cast this turn, so no counterspell was put on the stack." },
+  { id: "random-discard", kind: "disruption", minTurn: 2, title: "Discard at random.", prompt: "Randomize the nonland cards in your hand and discard one of them.", card: "Wheel pressure", tags: ["Discard", "Hand"], responseOptions: ["counter", "custom"], emptyOutcome: "You had no nonland card to discard." },
+  { id: "graveyard-hate", kind: "disruption", minTurn: 3, title: "Exile your graveyard.", prompt: "Exile your graveyard before your next graveyard effect resolves. Can you save or use anything first?", card: "Bojuka Bog", tags: ["Exile", "Graveyard"], responseOptions: ["counter", "protect", "redirect", "custom"], emptyOutcome: "Your graveyard was empty when the ability resolved." },
+  { id: "artifact-sweep", kind: "disruption", minTurn: 5, title: "Destroy your artifacts.", prompt: "The overloaded spell destroys each artifact the acting opponent doesn’t control, including yours. Mana rocks, Equipment, Treasures, and artifact creatures are caught; normal protection from destruction still applies.", card: "Vandalblast", tags: ["Destroy", "Artifacts"], responseOptions: ["counter", "protect", "custom"], emptyOutcome: "You controlled no artifact affected by the overloaded spell." },
+  { id: "goad", kind: "disruption", minTurn: 4, title: "Your creatures are goaded.", prompt: "Until the acting opponent’s next turn, each creature they don’t control is goaded: it attacks each combat if able and attacks a player other than that opponent if able.", card: "Disrupt Decorum", tags: ["Goad", "Combat"], responseOptions: ["counter", "protect", "custom"], emptyOutcome: "You controlled no creature the table action could goad." },
+  { id: "combo-clock", kind: "threat", minTurn: 1, title: "A two-card win is assembling.", prompt: "A compact combo is telegraphed. Remove a piece, stop the tutor, or prepare stack interaction before the clock expires.", card: "Thassa’s Oracle line", tags: ["Game-ending", "Combo"], responseOptions: ["custom"], emptyOutcome: "The telegraphed line is no longer a live threat.", gameChanger: true },
+  { id: "artifact-clock", kind: "threat", minTurn: 1, title: "A lethal artifact is charging.", prompt: "An artifact engine will produce a game-ending activation when its countdown reaches zero.", card: "Aetherflux Reservoir", tags: ["Game-ending", "Artifact"], responseOptions: ["custom"], emptyOutcome: "The artifact engine is no longer a live threat." },
+  { id: "combat-clock", kind: "threat", minTurn: 1, title: "A lethal combat turn is coming.", prompt: "The creature deck is building a lethal overrun. Remove the enabler or hold up a fog before the countdown expires.", card: "Craterhoof Behemoth", tags: ["Game-ending", "Combat"], responseOptions: ["custom"], emptyOutcome: "The combat setup is no longer a live threat." },
 ];
+
+/** Supplies deterministic response metadata when migrating pre-v5 events. */
+export function responseMetadataForEvent(templateId: string, kind: EventKind): Pick<SimEvent, "responseOptions" | "emptyOutcome"> | null {
+  if (kind === "attack" || kind === "development") return { responseOptions: [] };
+  const template = EVENT_TEMPLATES.find((candidate) => candidate.id === templateId);
+  if (template) return { responseOptions: [...template.responseOptions], emptyOutcome: template.emptyOutcome };
+  return null;
+}
 
 // FNV-1a and Mulberry32 provide deterministic, non-cryptographic replay randomness.
 // Keep both algorithms stable: existing session seeds depend on their exact output.
@@ -288,6 +331,26 @@ function rngFor(value: string) {
 
 const intBetween = (random: () => number, minimum: number, maximum: number) => Math.floor(random() * (maximum - minimum + 1)) + minimum;
 
+/** Returns an exact tracked amount or `null` when the value is outside the app's numeric contract. */
+export function nonnegativeSafeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+const safeAmount = (value: unknown) => nonnegativeSafeInteger(value) ?? 0;
+
+const addAmounts = (left: number, right: number) => left > Number.MAX_SAFE_INTEGER - right ? Number.MAX_SAFE_INTEGER : left + right;
+
+const subtractLife = (life: number, damage: number) => life < Number.MIN_SAFE_INTEGER + damage ? Number.MIN_SAFE_INTEGER : life - damage;
+
+function safeLife(value: unknown) {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : 0;
+}
+
+function safeDamageMap(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {} as Record<string, number>;
+  return Object.fromEntries(Object.entries(value).filter(([source]) => source.length > 0).map(([source, damage]) => [source, safeAmount(damage)]));
+}
+
 function weightedPick<T extends string>(random: () => number, weights: Record<T, number>): T {
   const entries = Object.entries(weights) as [T, number][];
   const total = entries.reduce((sum, [, weight]) => sum + Math.max(0, weight), 0);
@@ -302,7 +365,7 @@ function weightedPick<T extends string>(random: () => number, weights: Record<T,
 function chooseKeyword(random: () => number, excluded: Keyword[] = []): Keyword {
   const weights: Record<Keyword, number> = {
     Flying: 24, Trample: 20, Menace: 12, Vigilance: 10, Deathtouch: 9,
-    "First strike": 9, Haste: 8, Lifelink: 5, "Double strike": 3, Reach: 1,
+    "First strike": 9, Haste: 8, Lifelink: 5, "Double strike": 3, Reach: 1, Infect: 0,
   };
   excluded.forEach((keyword) => { weights[keyword] = 0; });
   return weightedPick(random, weights);
@@ -374,15 +437,11 @@ function generateCombatDeclaration(random: () => number, turn: number, source: O
       toughness: Math.max(1, power + intBetween(random, -1, 1)),
       keywords,
       isCommander,
+      commanderId: isCommander ? opponentCommanderKey(source.id) : undefined,
+      commanderLabel: isCommander ? `${source.name}’s commander` : undefined,
     };
   });
 }
-
-/** Raw unblocked damage; models double strike but not blocks or prevention. */
-export const incomingDamage = (attackers: Attacker[]) => attackers.reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0);
-
-/** Commander-only portion of raw unblocked damage. */
-export const incomingCommanderDamage = (attackers: Attacker[]) => attackers.filter((attacker) => attacker.isCommander).reduce((sum, attacker) => sum + attacker.power * (attacker.keywords.includes("Double strike") ? 2 : 1), 0);
 
 /**
  * Generates the same event for identical inputs and avoids recent templates
@@ -423,9 +482,10 @@ export function generateEvent(input: {
       sourceId: source.id,
       sourceName: source.name,
       title: `${source.name} declares ${attackers.length === 1 ? "one attacker" : `all ${attackers.length} attackers`} at you.`,
-      prompt: "These are all attackers declared at you for this combat. Resolve blocks and interaction once, then record the total damage that gets through.",
+      prompt: "These are all attackers declared at you for this combat. Resolve blocks and interaction once, then record each combat-damage step. Ordinary generation produces at most one combat each turn; record externally created extra combats separately.",
       card: `${PROFILE_LABELS[source.profile]} combat`,
-      tags: ["Combat", "Only combat this turn", `B${bracket} ${bracketRules.label}`, `Turn ${turn} scaling`],
+      tags: ["Combat", "One generated combat this turn", `B${bracket} ${bracketRules.label}`, `Turn ${turn} scaling`],
+      responseOptions: [],
       attackers,
     };
   }
@@ -442,6 +502,7 @@ export function generateEvent(input: {
       prompt: "This is a matchup-defining inclusion for this profile and bracket. It is not being cast by this event; use the breathing room to advance your own plan.",
       card: coreCard,
       tags: ["Deck intel", "Core card", `B${bracket} ${bracketRules.label}`],
+      responseOptions: [],
     };
   }
 
@@ -461,6 +522,8 @@ export function generateEvent(input: {
     prompt: template.prompt,
     card: template.card,
     tags: [...template.tags, `B${bracket} ${bracketRules.label}`],
+    responseOptions: [...template.responseOptions],
+    emptyOutcome: template.emptyOutcome,
     threat: template.kind === "threat" ? {
       id: `threat-${turn}-${counter}`,
       ownerId: source.id,
@@ -473,9 +536,16 @@ export function generateEvent(input: {
 }
 
 /** Rolls a deterministic response to the user's counterspell. */
-export function counterBacks(input: { profile: ProfileId; bracket: CommanderBracket; seed: string; turn: number; counter: number }) {
+export function counterBacks(input: {
+  profile: ProfileId;
+  bracket: CommanderBracket;
+  seed: string;
+  turn: number;
+  eventCounter: number;
+  exchange: number;
+}) {
   const interaction = COMMANDER_BRACKETS[normalizeCommanderBracket(input.bracket)].interaction;
-  return rngFor(`${input.seed}:counter:${input.turn}:${input.counter}`)() < Math.min(.8, DECK_PROFILES[input.profile].counterBack * interaction);
+  return rngFor(`${input.seed}:counter:${input.turn}:${input.eventCounter}:${input.exchange}`)() < Math.min(.8, DECK_PROFILES[input.profile].counterBack * interaction);
 }
 
 /** Rolls one deterministic defense while leaving exact combat resolution to the playtester. */
@@ -500,29 +570,90 @@ export function rollDefense(input: {
     return { type, title: "Spot removal", detail: `${target?.name ?? "Your largest attacker"} is targeted before combat damage. You may answer the removal.` };
   }
   if (type === "fog") return { type, title: "Fog effect", detail: "Prevent all combat damage this combat unless you can stop the effect." };
-  const blockerCount = Math.min(4, 1 + Math.floor((effectiveTurn - 1) / 4));
+  const baseBlockerCount = Math.min(4, 1 + Math.floor((effectiveTurn - 1) / 4));
+  const blockerCount = input.attackers.some((attacker) => attacker.keywords.includes("Menace")) ? Math.max(2, baseBlockerCount) : baseBlockerCount;
   const needsReach = input.attackers.some((attacker) => attacker.keywords.includes("Flying"));
   return { type, title: `${blockerCount} ${blockerCount === 1 ? "blocker" : "blockers"}`, detail: `The opponent commits ${blockerCount} plausible ${needsReach ? "blocker(s), including flying or reach where needed" : "blocker(s)"}. Resolve exact blocks in your playtester.` };
 }
 
-/**
- * Applies regular and per-commander damage, including the format's 21-damage
- * loss rule. `regularDamage` must exclude damage already in `commanderHits`.
- */
-export function applyCombatDamage(input: {
-  life: number;
-  commanderDamage: Record<string, number>;
-  regularDamage: number;
-  commanderHits: Record<string, number>;
-}) {
-  const regularDamage = Math.max(0, Math.floor(Number(input.regularDamage) || 0));
-  const commanderHits = Object.fromEntries(Object.entries(input.commanderHits).map(([source, damage]) => [source, Math.max(0, Math.floor(Number(damage) || 0))]));
-  const commanderDamage = { ...input.commanderDamage };
-  Object.entries(commanderHits).forEach(([source, damage]) => {
-    commanderDamage[source] = (commanderDamage[source] ?? 0) + damage;
+function addCommanderHit(damage: Record<string, number>, source: string, amount: number) {
+  if (!source) return;
+  const current = Object.prototype.hasOwnProperty.call(damage, source) ? safeAmount(damage[source]) : 0;
+  Object.defineProperty(damage, source, { value: addAmounts(current, amount), enumerable: true, configurable: true, writable: true });
+}
+
+/** Builds editable full-attack defaults without inferring blocks, prevention, or replacement effects. */
+export function buildDefaultCombatDamageSteps(attackers: readonly Attacker[], fallbackCommanderId?: string): CombatDamageStep[] {
+  const first: CombatDamageStep = { step: "first", lifeDamage: 0, commanderHits: {}, poisonCounters: 0, lifelinkGain: 0 };
+  const regular: CombatDamageStep = { step: "regular", lifeDamage: 0, commanderHits: {}, poisonCounters: 0, lifelinkGain: 0 };
+  let hasFirst = false;
+  let hasRegular = false;
+
+  const addAttacker = (step: CombatDamageStep, attacker: Attacker, power: number) => {
+    if (attacker.keywords.includes("Infect")) step.poisonCounters = addAmounts(step.poisonCounters, power);
+    else step.lifeDamage = addAmounts(step.lifeDamage, power);
+    if (attacker.isCommander) addCommanderHit(step.commanderHits, attacker.commanderId ?? fallbackCommanderId ?? "", power);
+    if (attacker.keywords.includes("Lifelink")) step.lifelinkGain = addAmounts(step.lifelinkGain, power);
+  };
+
+  attackers.forEach((attacker) => {
+    const power = safeAmount(attacker.power);
+    const firstStrike = attacker.keywords.includes("First strike");
+    const doubleStrike = attacker.keywords.includes("Double strike");
+    if (firstStrike || doubleStrike) {
+      hasFirst = true;
+      addAttacker(first, attacker, power);
+    }
+    if (!firstStrike || doubleStrike) {
+      hasRegular = true;
+      addAttacker(regular, attacker, power);
+    }
   });
-  const totalDamage = regularDamage + Object.values(commanderHits).reduce((sum, damage) => sum + damage, 0);
-  const life = input.life - totalDamage;
-  const lethalCommander = Object.entries(commanderDamage).find(([, damage]) => damage >= 21)?.[0] ?? null;
-  return { life, commanderDamage, totalDamage, defeated: life <= 0 || Boolean(lethalCommander), lethalCommander };
+
+  return [...(hasFirst ? [first] : []), ...(hasRegular ? [regular] : [])];
+}
+
+/** Applies combat-damage steps in rules order and checks tracked loss conditions between them. */
+export function resolveCombatDamage(input: {
+  state: CombatState;
+  steps: readonly CombatDamageStep[];
+  lossPrevented?: boolean;
+}): CombatResolution {
+  let life = safeLife(input.state?.life);
+  let poisonCounters = safeAmount(input.state?.poisonCounters);
+  const commanderDamage = safeDamageMap(input.state?.commanderDamage);
+  const steps = Array.isArray(input.steps) ? input.steps : [];
+  const stepsApplied: CombatResolution["stepsApplied"] = [];
+  let lifeDamage = 0;
+  let poisonAdded = 0;
+  let lifelinkGain = 0;
+  let defeated = false;
+  let lossReason: CombatResolution["lossReason"] = null;
+  let lethalCommander: string | null = null;
+
+  for (const stepName of ["first", "regular"] as const) {
+    const step = steps.find((candidate) => candidate?.step === stepName);
+    if (!step) continue;
+    const stepLifeDamage = safeAmount(step.lifeDamage);
+    const stepPoison = safeAmount(step.poisonCounters);
+    const stepLifelink = safeAmount(step.lifelinkGain);
+    Object.entries(safeDamageMap(step.commanderHits)).forEach(([source, damage]) => addCommanderHit(commanderDamage, source, damage));
+    life = subtractLife(life, stepLifeDamage);
+    poisonCounters = addAmounts(poisonCounters, stepPoison);
+    lifeDamage = addAmounts(lifeDamage, stepLifeDamage);
+    poisonAdded = addAmounts(poisonAdded, stepPoison);
+    lifelinkGain = addAmounts(lifelinkGain, stepLifelink);
+    stepsApplied.push(stepName);
+
+    const lethalEntry = Object.entries(commanderDamage).find(([, damage]) => damage >= 21);
+    const reason = life <= 0 ? "life" : poisonCounters >= 10 ? "poison" : lethalEntry ? "commander" : null;
+    if (reason && input.lossPrevented !== true) {
+      defeated = true;
+      lossReason = reason;
+      lethalCommander = reason === "commander" ? lethalEntry?.[0] ?? null : null;
+      break;
+    }
+  }
+
+  return { life, poisonCounters, commanderDamage, defeated, lossReason, lethalCommander, stepsApplied, lifeDamage, poisonAdded, lifelinkGain };
 }
