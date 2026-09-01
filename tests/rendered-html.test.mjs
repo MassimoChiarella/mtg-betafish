@@ -61,7 +61,7 @@ test("game-over recovery preserves the expired turn event, undo, and explicit an
   const hydration = sourceSection(pageSource, "// Persistence is best-effort", "// Move focus only");
   assert.match(hydration, /decodeGameState\(JSON\.parse\(saved\)\)/);
   assert.match(hydration, /if \(!decoded\) window\.localStorage\.removeItem\(STORAGE_KEY\)/);
-  assert.match(pageSource, /resolveEvent\("Action answered", labels\[answer\], "success", \{\}, true\)/);
+  assert.match(pageSource, /resolveEvent\("Action answered", event\.kind === "signature" \? `\$\{event\.card\}: \$\{labels\[answer\]\}` : labels\[answer\], "success", \{\}, true\)/);
   assert.match(pageSource, /applyIncoming\(zeroCombatSteps\(incomingDamageSteps\), "Combat prevented", true\)/);
   assert.match(sourceSection(pageSource, "function stopThreat()", "function delayThreat()"), /answeredCount: addSafeInteger\(previous\.answeredCount, 1\)/);
   assert.match(sourceSection(pageSource, "function answerDefense()", "function applyOutgoingDamage("), /setDefenseAnswered\(true\)/);
@@ -99,8 +99,25 @@ test("signature-card reveals expose the exact card through the shared preview", 
   const encounter = sourceSection(pageSource, '<article className={`encounter-card', '<div className="tag-row">');
 
   assert.match(presentation, /development: \{ label: "Signature card reveal"/);
+  assert.match(presentation, /signature: \{ label: "Signature card encounter"/);
   assert.doesNotMatch(lookup, /kind === "development"/);
-  assert.match(encounter, /game\.currentEvent\.kind === "development"[^\n]+<strong>Signature card:<\/strong> <CardPreview name=\{game\.currentEvent\.card\} \/>/);
+  assert.match(encounter, /game\.currentEvent\.kind === "development" \|\| game\.currentEvent\.kind === "signature"/);
+  assert.match(encounter, /Revealed signature card in use:/);
+  assert.match(encounter, /<CardPreview name=\{game\.currentEvent\.card\} \/>/);
+});
+
+test("recorded signature-card reveals feed every next-event generation path exactly once", () => {
+  const helper = sourceSection(pageSource, "function signatureFollowUpFor", "const EVENT_PRESENTATION");
+  const advance = sourceSection(pageSource, "function advanceTurn()", "function continueAfterGameOver()");
+  const continuation = sourceSection(pageSource, "function continueAfterGameOver()", "function adjustPlayerStat(");
+  const settings = sourceSection(pageSource, "function saveSettings()", "function openCombat()");
+
+  assert.match(helper, /state\.responseStage === "resolved"/);
+  assert.match(helper, /event\.templateId === SIGNATURE_REVEAL_TEMPLATE_ID/);
+  assert.doesNotMatch(helper, /SIGNATURE_USE_TEMPLATE_ID/);
+  for (const source of [advance, continuation, settings]) {
+    assert.match(source, /signatureFollowUp: signatureFollowUpFor\(previous\)/);
+  }
 });
 
 test("accessible client contracts use one game-over announcement and native combat semantics", () => {

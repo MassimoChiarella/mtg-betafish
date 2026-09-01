@@ -14,6 +14,8 @@ import {
   normalizeCommanderBracket,
   resolveCombatDamage,
   rollDefense,
+  SIGNATURE_REVEAL_TEMPLATE_ID,
+  SIGNATURE_USE_TEMPLATE_ID,
   userCommanderKey,
 } from "../app/simulator.ts";
 
@@ -127,12 +129,75 @@ test("every bracket-specific core card can surface as matchup intel", () => {
         });
         if (event.kind === "development") {
           unseen.delete(event.card);
-          assert.match(event.prompt, /not being cast by this event/i);
+          assert.match(event.prompt, /next generated action will use this exact card/i);
         }
       }
       assert.deepEqual([...unseen], [], `${profileId} B${bracket} has unreachable core cards`);
     }
   }
+});
+
+test("every revealed core card forces the exact next signature-card encounter", () => {
+  for (const [profileId, profile] of Object.entries(DECK_PROFILES)) {
+    for (const bracket of [1, 2, 3, 4, 5]) {
+      const source = {
+        id: `${profileId}-${bracket}`,
+        name: "Revealing opponent",
+        profile: profileId,
+        bracket,
+        life: 40,
+        poisonCounters: 0,
+        commanderDamage: {},
+        eliminated: false,
+      };
+      for (const card of profile.coreCards[bracket]) {
+        const input = {
+          turn: 8,
+          counter: 12,
+          seed: "SIGNATURE-FOLLOW-UP",
+          opponents: [source],
+          recentTemplateIds: [SIGNATURE_REVEAL_TEMPLATE_ID],
+          activeThreat: false,
+          signatureFollowUp: { sourceId: source.id, card },
+        };
+        const event = generateEvent(input);
+
+        assert.deepEqual(event, generateEvent(input));
+        assert.equal(event.templateId, SIGNATURE_USE_TEMPLATE_ID);
+        assert.equal(event.kind, "signature");
+        assert.equal(event.sourceId, source.id);
+        assert.equal(event.card, card);
+        assert.deepEqual(event.responseOptions, ["custom"]);
+        assert.match(event.prompt, /exact signature card revealed in the previous encounter/i);
+      }
+    }
+  }
+});
+
+test("stale or invalid signature follow-ups fall back to normal seeded generation", () => {
+  const living = {
+    id: "living",
+    name: "Living",
+    profile: "control",
+    bracket: 3,
+    life: 40,
+    poisonCounters: 0,
+    commanderDamage: {},
+    eliminated: false,
+  };
+  const base = { turn: 8, counter: 22, seed: "STALE-SIGNATURE", opponents: [living], recentTemplateIds: [], activeThreat: false };
+  const normal = generateEvent(base);
+
+  assert.deepEqual(generateEvent({ ...base, signatureFollowUp: { sourceId: "missing", card: "Counterspell" } }), normal);
+  assert.deepEqual(generateEvent({ ...base, signatureFollowUp: { sourceId: living.id, card: "Black Lotus" } }), normal);
+  assert.deepEqual(generateEvent({ ...base, signatureFollowUp: { sourceId: living.id, card: DECK_PROFILES.control.coreCards[4][0] } }), normal);
+
+  const eliminated = { ...living, id: "gone", eliminated: true };
+  const withEliminated = { ...base, opponents: [eliminated, living] };
+  assert.deepEqual(
+    generateEvent({ ...withEliminated, signatureFollowUp: { sourceId: eliminated.id, card: DECK_PROFILES.control.coreCards[3][0] } }),
+    generateEvent(withEliminated),
+  );
 });
 
 test("Commander brackets increase pace and interaction without changing replayability", () => {

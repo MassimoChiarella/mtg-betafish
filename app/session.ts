@@ -50,7 +50,7 @@ type UnknownRecord = Record<string, unknown>;
 
 const PROFILES = new Set<string>(["midrange", "control", "swarm", "voltron", "combo", "graveyard"]);
 const BRACKETS = new Set<unknown>([1, 2, 3, 4, 5]);
-const EVENT_KINDS = new Set<string>(["targeted", "wipe", "counter", "disruption", "attack", "threat", "development"]);
+const EVENT_KINDS = new Set<string>(["targeted", "wipe", "counter", "disruption", "attack", "threat", "development", "signature"]);
 const KEYWORDS = new Set<string>([
   "Flying",
   "Reach",

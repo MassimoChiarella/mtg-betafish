@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { SIGNATURE_USE_TEMPLATE_ID } from "../app/simulator.ts";
 import { decodeGameState, GAME_STATE_VERSION } from "../app/session.ts";
 
 function currentState() {
@@ -115,6 +116,31 @@ function makeAttack(state) {
     isCommander: false,
   }];
 }
+
+test("an actionable signature-card encounter preserves its revealed source and card", () => {
+  const state = currentState();
+  state.currentEvent = {
+    id: "signature-card-encounter",
+    templateId: SIGNATURE_USE_TEMPLATE_ID,
+    kind: "signature",
+    sourceId: "one",
+    sourceName: "One",
+    title: "One uses the revealed Cyclonic Rift.",
+    prompt: "Resolve the exact revealed card.",
+    card: "Cyclonic Rift",
+    tags: ["Signature follow-through", "Previously revealed"],
+    responseOptions: ["custom"],
+    emptyOutcome: "There was no legal opportunity to use the revealed card in the current playtest state.",
+  };
+  state.responseStage = "choose";
+
+  const decoded = decodeGameState(state);
+  assert.ok(decoded);
+  assert.equal(decoded.currentEvent.kind, "signature");
+  assert.equal(decoded.currentEvent.sourceId, "one");
+  assert.equal(decoded.currentEvent.card, "Cyclonic Rift");
+  assert.deepEqual(decoded.currentEvent.responseOptions, ["custom"]);
+});
 
 test("a valid v5 state round-trips as a fresh serializable value", () => {
   const raw = deepFreeze(currentState());

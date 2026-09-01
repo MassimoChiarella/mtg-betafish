@@ -17,6 +17,7 @@ import {
   PROFILE_LABELS,
   resolveCombatDamage,
   rollDefense,
+  SIGNATURE_REVEAL_TEMPLATE_ID,
   userCommanderKey,
   type Attacker,
   type CombatDamageStep,
@@ -28,6 +29,7 @@ import {
   type Opponent,
   type ProfileId,
   type ResponseOption,
+  type SignatureFollowUp,
   type SimEvent,
 } from "./simulator";
 import {
@@ -150,6 +152,13 @@ function bracketLabel(value: unknown) {
   return `B${bracket} ${COMMANDER_BRACKETS[bracket].label}`;
 }
 
+function signatureFollowUpFor(state: Pick<GameState, "currentEvent" | "responseStage">): SignatureFollowUp | null {
+  const event = state.currentEvent;
+  return state.responseStage === "resolved" && event.templateId === SIGNATURE_REVEAL_TEMPLATE_ID
+    ? { sourceId: event.sourceId, card: event.card }
+    : null;
+}
+
 const EVENT_PRESENTATION = {
   targeted: { label: "Single-target interaction", glyph: "↗" },
   wipe: { label: "Board wipe", glyph: "✺" },
@@ -158,6 +167,7 @@ const EVENT_PRESENTATION = {
   attack: { label: "Incoming combat", glyph: "⚔" },
   threat: { label: "Game-ending threat", glyph: "!" },
   development: { label: "Signature card reveal", glyph: "…" },
+  signature: { label: "Signature card encounter", glyph: "✦" },
 } satisfies Record<SimEvent["kind"], { label: string; glyph: string }>;
 
 const RESPONSE_PRESENTATION: Record<ResponseOption, { title: string; detail: string }> = {
@@ -449,8 +459,12 @@ export default function Home() {
   function letEventResolve() {
     const event = game.currentEvent;
     if (event.kind === "attack") return;
-    if (event.kind === "development") {
-      resolveEvent("Table developed", `${event.sourceName} advances their game plan. Nothing new targets you.`, "neutral");
+    if (event.templateId === SIGNATURE_REVEAL_TEMPLATE_ID) {
+      resolveEvent("Signature card revealed", `${event.sourceName} revealed ${event.card}. Their next generated action will use this exact card if they remain on the same profile and bracket.`, "neutral");
+      return;
+    }
+    if (event.kind === "signature") {
+      resolveEvent("Signature card used", `${event.sourceName} follows through with the previously revealed ${event.card}. Apply its printed rules text in your playtester.`, "warning");
       return;
     }
     if (event.kind === "threat" && event.threat) {
@@ -492,7 +506,7 @@ export default function Home() {
       redirect: "You changed the target; apply the new target in your playtester.",
       custom: "You supplied another legal answer; apply its exact result in your playtester.",
     };
-    resolveEvent("Action answered", labels[answer], "success", {}, true);
+    resolveEvent("Action answered", event.kind === "signature" ? `${event.card}: ${labels[answer]}` : labels[answer], "success", {}, true);
   }
 
   function applyIncoming(steps: readonly CombatDamageStep[], label: string, answered = false, lossPrevented = false) {
@@ -585,6 +599,7 @@ export default function Home() {
         recentTemplateIds,
         activeThreat: Boolean(activeThreat),
         combatResolvedTurn: previous.combatResolvedTurn,
+        signatureFollowUp: signatureFollowUpFor(previous),
       });
       return {
         ...previous,
@@ -619,6 +634,7 @@ export default function Home() {
           recentTemplateIds,
           activeThreat: false,
           combatResolvedTurn: previous.combatResolvedTurn,
+          signatureFollowUp: signatureFollowUpFor(previous),
         }),
         responseStage: "prompt",
         resolution: "",
@@ -747,6 +763,7 @@ export default function Home() {
         recentTemplateIds,
         activeThreat: Boolean(activeThreat),
         combatResolvedTurn: previous.combatResolvedTurn,
+        signatureFollowUp: signatureFollowUpFor(previous),
       });
       const currentEvent: SimEvent = isFollowUp
         ? { ...generatedEvent, title: `Follow-up action: ${generatedEvent.title}`, tags: ["Follow-up action", ...generatedEvent.tags] }
@@ -974,7 +991,7 @@ export default function Home() {
             <div className="encounter-copy">
               <p className="source"><span className="avatar avatar-1">{game.currentEvent.sourceName.slice(0, 1)}</span> {game.currentEvent.sourceName} takes an action</p>
               <h2>{glossaryText(game.currentEvent.title, encounterGlossaryTerms)}</h2>
-              {game.currentEvent.kind === "development" && <p><strong>Signature card:</strong> <CardPreview name={game.currentEvent.card} /></p>}
+              {(game.currentEvent.kind === "development" || game.currentEvent.kind === "signature") && <p><strong>{game.currentEvent.kind === "development" ? "Signature card revealed:" : "Revealed signature card in use:"}</strong> <CardPreview name={game.currentEvent.card} /></p>}
               <p>{glossaryText(game.currentEvent.prompt, encounterGlossaryTerms)}</p>
               <div className="tag-row">{game.currentEvent.tags.map((tag) => <span className="event-tag" key={tag}>{glossaryText(tag, encounterGlossaryTerms)}</span>)}</div>
 
