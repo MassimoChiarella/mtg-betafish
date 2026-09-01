@@ -47,6 +47,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   border-radius: 6px;
   box-shadow: 0 0 0 2px var(--paper);
 }
+[tabindex="-1"] { scroll-margin-block: 96px 24px; }
 .sr-only {
   position: absolute !important;
   width: 1px !important;
@@ -74,6 +75,24 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .skip-link:focus { transform: translateY(0); }
 
 .app-shell { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+.storage-conflict {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  padding: 12px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  border-bottom: 1px solid #d79886;
+  background: #fff0eb;
+  color: #6f2b1c;
+}
+.storage-conflict > div:first-child { display: grid; gap: 3px; font-size: 13px; line-height: 1.35; }
+.storage-conflict h2 { margin: 0; font: inherit; font-weight: 800; scroll-margin-top: 12px; }
+.storage-conflict > div:last-child { display: flex; gap: 8px; }
+.storage-conflict button { min-height: 40px; padding: 0 13px; border: 1px solid #a84a34; border-radius: 8px; background: var(--paper); color: #7d2e1d; font-size: 12px; font-weight: 700; }
+.storage-conflict button:last-child { background: #8f3724; color: white; }
 .topbar {
   position: sticky;
   z-index: 20;
@@ -181,6 +200,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .poison-control button:hover { color: var(--ink); }
 .poison-control-dark { color: #a8aab2; }
 .poison-control-dark button { background: #242424; color: #d7d7db; }
+.tracked-actions { grid-column: 2 / -1; justify-self: end; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.tracked-actions button { min-height: 30px; padding: 0 8px; border: 0; border-radius: 6px; background: var(--surface-soft); color: var(--muted); font-size: 10px; font-weight: 700; }
+.tracked-actions button:hover { color: var(--ink); }
+.tracked-actions-dark button { background: #242424; color: #d7d7db; }
+.protection-badge { width: fit-content; margin-top: 6px; padding: 4px 7px; display: block; border-radius: 5px; background: #fff0c7; color: #765500 !important; font-size: 9px !important; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.protection-badge-dark { background: #3d3826; color: #ffe69a !important; }
 .opponent.eliminated .avatar { filter: grayscale(.7); }
 .avatar {
   width: 38px;
@@ -417,6 +442,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   letter-spacing: .06em;
   text-transform: uppercase;
 }
+.commander-identity { margin-top: 5px; display: block; color: var(--muted); font-size: 10px; font-weight: 600; line-height: 1.35; }
 .pt { min-width: 38px; font-size: 17px; font-weight: 600; text-align: center; }
 .keyword-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .keyword-chip { padding: 0; border-radius: 6px; background: #e6eee9; color: #28584b; font-size: 10px; font-weight: 700; white-space: nowrap; }
@@ -429,6 +455,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .damage-steps { display: grid; gap: 12px; }
 .damage-step { min-width: 0; margin: 0; padding: 13px; border: 1px solid var(--line); border-radius: 12px; }
 .damage-step legend { padding: 0 6px; color: var(--ink); font-size: 12px; font-weight: 700; }
+.damage-step-toggle { min-height: 32px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.damage-step-toggle input { width: 18px; height: 18px; }
+.damage-step-disabled { background: var(--surface); opacity: .72; }
+.damage-step-disabled .damage-inputs { opacity: .58; }
 .damage-inputs label, .settings-body label, .attacker-form > label, .target-select {
   display: grid;
   gap: 7px;
@@ -452,6 +482,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   text-transform: none;
 }
 .damage-inputs input:focus, .settings-body input:focus, .settings-body select:focus, .attacker-form input:focus, .attacker-form select:focus, .target-select select:focus { border-color: var(--blue); }
+.toxic-payment { margin: 18px 26px 0; padding: 13px; display: grid; grid-template-columns: minmax(0, 1fr) 120px; align-items: center; gap: 7px 12px; border: 1px solid #d79886; border-radius: 12px; background: #fff7f3; color: #7a3424; font-size: 12px; font-weight: 700; }
+.toxic-payment input, .correction-form input { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); font-size: 16px; }
+.toxic-payment small, .toxic-payment .inline-error { grid-column: 1 / -1; }
+.toxic-payment small { color: var(--muted); font-weight: 500; line-height: 1.45; }
+.toxic-payment-locked { margin: 18px 26px 0; padding: 11px 13px; border: 1px solid #d79886; border-radius: 10px; background: #fff7f3; color: #7a3424; font-size: 12px; font-weight: 700; line-height: 1.45; }
+.inline-error { color: #9a2f19; font-size: 12px; font-weight: 700; line-height: 1.4; }
+[aria-invalid="true"] { border-color: #b33b25 !important; }
 .modal-actions.compact-actions { margin-top: 14px; padding: 0; border: 0; }
 .compact-actions .primary-button { min-width: 160px; }
 .resolved-box { padding: 19px 28px; display: flex; align-items: center; gap: 12px; border-top: 1px solid #bfe8ca; background: var(--success-soft); }
@@ -508,6 +545,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .threat-card::after { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: rgba(255,255,255,.7); }
 .threat-icon { width: 32px; height: 32px; margin-bottom: 16px; display: grid; place-items: center; border: 1px solid #a7442e; border-radius: 8px; color: #a7442e; font-size: 14px; font-weight: 800; }
 .threat-card strong { font-size: 18px; font-weight: 600; line-height: 1.25; }
+.threat-owner { margin-top: 7px; display: block; color: #704b42; font-size: 11px; font-weight: 700; line-height: 1.4; }
 .threat-card p { margin: 9px 0 14px; color: #704b42; font-size: 13px; line-height: 1.5; }
 .threat-actions { position: relative; z-index: 1; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; }
 .text-button.light { padding: 7px 0; color: var(--ink); font-size: 11px; font-weight: 700; }
@@ -565,7 +603,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .glossary-help-trigger > span { width: 14px; height: 14px; display: inline-grid; place-items: center; margin-right: 3px; border: 1px solid currentColor; border-radius: 50%; font-size: 8px; }
 
 .commander-ledger { position: relative; width: fit-content; margin-top: 6px; }
-.commander-ledger summary { min-width: 24px; min-height: 24px; padding: 4px 8px; display: flex; align-items: center; border-radius: 6px; background: var(--surface-soft); color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .05em; list-style: none; cursor: pointer; }
+.commander-ledger summary { min-width: 24px; min-height: 28px; padding: 5px 8px; display: flex; align-items: center; border-radius: 6px; background: var(--surface-soft); color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .01em; line-height: 1.25; list-style: none; cursor: pointer; }
 .commander-ledger summary::-webkit-details-marker { display: none; }
 .commander-ledger ul { position: absolute; z-index: 10; top: calc(100% + 5px); left: 0; width: 215px; margin: 0; padding: 8px; list-style: none; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); color: var(--ink); box-shadow: 0 12px 28px rgba(0,0,0,.12); }
 .commander-ledger li { display: flex; justify-content: space-between; gap: 8px; padding: 6px; font-size: 11px; }
@@ -598,6 +636,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .remove-button:disabled { opacity: .3; }
 .add-opponent { min-height: 44px; border: 1px dashed #bbc0c8; border-radius: 12px; background: transparent; color: var(--ink); font-size: 12px; font-weight: 700; }
 .add-opponent:disabled { opacity: .4; }
+.settings-error { grid-column: 1 / -1; margin: 0; }
+.settings-actions { flex-wrap: wrap; }
 .session-settings { padding: 18px; display: grid; align-content: start; gap: 16px; border-radius: 20px; background: var(--ink); }
 .session-settings label { color: #d7d7db; }
 .session-settings p { margin: 0; color: #a8aab2; font-size: 11px; line-height: 1.55; }
@@ -623,6 +663,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .keyword-picker input { width: 14px; height: 14px; min-height: 0; }
 .keyword-picker .glossary-help { margin-right: 2px; }
 .add-attacker-button { grid-column: 1 / -1; min-height: 42px; font-size: 12px; font-weight: 700; }
+.attacker-error { grid-column: 1 / -1; margin: 0; }
 .outgoing-list { display: grid; gap: 7px; margin-top: 13px; }
 .outgoing-list article { padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(150px, auto) 30px; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
 .outgoing-list strong, .outgoing-list small { display: block; }
@@ -654,9 +695,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .session-summary span { padding: 15px; display: grid; gap: 5px; border: 1px solid var(--line); border-radius: 16px; color: var(--muted); font-size: 11px; text-align: center; }
 .session-summary b { color: var(--ink); font-size: 29px; font-weight: 600; }
 .terminal-guidance { margin: 0; padding: 0 26px 18px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.correction-form { padding: 24px 26px 0; }
+.correction-primary-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.correction-form label { display: grid; gap: 7px; color: var(--muted); font-size: 11px; font-weight: 700; line-height: 1.4; }
+.correction-commanders { min-width: 0; margin: 18px 0 0; padding: 14px; border: 1px solid var(--line); border-radius: 14px; }
+.correction-commanders legend { padding: 0 6px; font-size: 12px; font-weight: 700; }
+.correction-commanders > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.correction-protection, .correction-restore { margin-top: 14px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.correction-form .boundary-note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.correction-form .modal-actions { margin: 20px -26px 0; }
 
 .session-footer { min-height: 56px; padding: 0 32px; display: flex; align-items: center; justify-content: center; gap: 28px; border-top: 1px solid #282828; background: var(--ink); color: #a8aab2; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
 .session-footer button { min-height: 40px; border: 0; background: none; color: white; font-size: 10px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; text-transform: uppercase; }
+.save-status-unsaved, .save-status-conflict, .save-status-discarded { color: #ffb39f; }
 
 @media (max-width: 1180px) {
   .workspace { grid-template-columns: minmax(420px, 1fr) 230px; grid-template-areas: "encounter opponents" "pressure pressure"; gap: 26px; }
@@ -671,12 +722,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 
 @media (max-width: 900px), (pointer: coarse) {
-  .damage-inputs input, .settings-body input, .settings-body select, .attacker-form input, .attacker-form select, .target-select select { min-height: 44px; font-size: 16px; }
+  .damage-inputs input, .settings-body input, .settings-body select, .attacker-form input, .attacker-form select, .target-select select, .toxic-payment input, .correction-form input { min-height: 44px; font-size: 16px; }
   .life-control { grid-template-columns: 44px 36px 44px; }
   .life-control > button { width: 44px; height: 44px; }
   .poison-control button { width: 44px; height: 44px; }
   .icon-button { width: 44px; height: 44px; }
-  .link-button, .session-footer button, .threat-actions button, .defense-result .text-button, .undo-button, .remove-button, .add-opponent, .add-attacker-button, .check-label { min-height: 44px; }
+  .link-button, .session-footer button, .threat-actions button, .defense-result .text-button, .undo-button, .remove-button, .add-opponent, .add-attacker-button, .check-label, .damage-step-toggle, .tracked-actions button, .storage-conflict button { min-height: 44px; }
   .glossary-help-trigger, .commander-ledger summary, .keyword-chip .glossary-preview-trigger { min-width: 44px; min-height: 44px; }
   .glossary-help-trigger { padding: 8px 10px; font-size: 11px; }
   .keyword-picker label { min-height: 44px; }
@@ -686,6 +737,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 
 @media (max-width: 820px) {
+  .storage-conflict { padding-inline: 18px; align-items: stretch; flex-direction: column; gap: 9px; }
+  .storage-conflict > div:last-child { flex-wrap: wrap; }
   .topbar { min-height: 66px; padding: 0 18px; grid-template-columns: auto 1fr auto; gap: 12px; }
   .turn-strip { min-width: 0; justify-items: end; }
   .turn-strip .eyebrow { font-size: 10px; }
@@ -718,7 +771,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .modal-actions { padding-inline: 17px; flex-direction: column; }
   .modal-actions > button { width: 100%; }
   .modal-actions .primary-button { min-width: 0; }
-  .choice-grid, .damage-inputs, .library-grid, .session-summary { grid-template-columns: 1fr; }
+  .choice-grid, .damage-inputs, .library-grid, .session-summary, .correction-primary-fields, .correction-commanders > div { grid-template-columns: 1fr; }
+  .toxic-payment { margin-inline: 17px; grid-template-columns: 1fr; }
+  .toxic-payment-locked { margin-inline: 17px; }
+  .toxic-payment input { grid-column: 1; }
+  .correction-form { padding-inline: 17px; }
+  .correction-form .modal-actions { margin-inline: -17px; }
   .attacker-form { grid-template-columns: 1fr 90px; }
   .attacker-form .check-label { grid-column: 1 / -1; }
   .library-note { margin-inline: 17px; }

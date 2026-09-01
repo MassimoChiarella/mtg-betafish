@@ -78,13 +78,24 @@ test("safe-integer boundaries are exact and combat totals saturate safely", () =
   const result = resolveCombatDamage({
     state: { life: Number.MAX_SAFE_INTEGER, poisonCounters: 0, commanderDamage: {} },
     steps: defaults,
-    lossPrevented: true,
+    lossProtected: true,
   });
   assert.equal(result.life, Number.MIN_SAFE_INTEGER);
   assert.equal(result.lifeDamage, Number.MAX_SAFE_INTEGER);
   assert.equal(result.commanderDamage[id], Number.MAX_SAFE_INTEGER);
   assert.equal(result.lifelinkGain, Number.MAX_SAFE_INTEGER);
   assert.deepEqual(result.stepsApplied, ["first", "regular"]);
+
+  const duplicate = resolveCombatDamage({
+    state: { life: Number.MAX_SAFE_INTEGER, poisonCounters: 0, commanderDamage: {} },
+    steps: [defaults[1], defaults[1]],
+    lossProtected: true,
+  });
+  assert.equal(duplicate.life, 0);
+  assert.equal(duplicate.lifeDamage, Number.MAX_SAFE_INTEGER);
+  assert.equal(duplicate.commanderDamage[id], Number.MAX_SAFE_INTEGER);
+  assert.equal(duplicate.lifelinkGain, Number.MAX_SAFE_INTEGER);
+  assert.deepEqual(duplicate.stepsApplied, ["regular"]);
 });
 
 test("fixed-seed attacker batches obey strike, Infect, lifelink, and commander-ID properties", () => {
@@ -114,7 +125,7 @@ test("fixed-seed attacker batches obey strike, Infect, lifelink, and commander-I
 
     const initial = { life: 100_000, poisonCounters: 0, commanderDamage: { baseline: 7 } };
     const initialSnapshot = structuredClone(initial);
-    const resolved = resolveCombatDamage({ state: initial, steps: actual, lossPrevented: true });
+    const resolved = resolveCombatDamage({ state: initial, steps: actual, lossProtected: true });
     const lifeDamage = expected.reduce((sum, step) => sum + step.lifeDamage, 0);
     const poisonAdded = expected.reduce((sum, step) => sum + step.poisonCounters, 0);
     const lifelinkGain = expected.reduce((sum, step) => sum + step.lifelinkGain, 0);
@@ -137,7 +148,7 @@ test("fixed-seed attacker batches obey strike, Infect, lifelink, and commander-I
   }
 });
 
-test("losses stop between steps unless lossPrevented explicitly keeps resolving", () => {
+test("losses stop between steps unless lossProtected explicitly keeps resolving", () => {
   const cases = [
     {
       name: "life",
@@ -164,12 +175,12 @@ test("losses stop between steps unless lossPrevented explicitly keeps resolving"
     assert.deepEqual(ordered.stepsApplied, ["first"]);
     assert.equal(ordered.commanderDamage["commander:later"], undefined);
 
-    const prevented = resolveCombatDamage({ state: scenario.state, steps: [regular, scenario.first], lossPrevented: true });
-    assert.equal(prevented.defeated, false);
-    assert.equal(prevented.lossReason, null);
-    assert.deepEqual(prevented.stepsApplied, ["first", "regular"]);
-    assert.equal(prevented.commanderDamage["commander:later"], 7);
-    assert.equal(prevented.lifelinkGain, scenario.first.lifelinkGain + regular.lifelinkGain);
+    const protectedResult = resolveCombatDamage({ state: scenario.state, steps: [regular, scenario.first], lossProtected: true });
+    assert.equal(protectedResult.defeated, false);
+    assert.equal(protectedResult.lossReason, null);
+    assert.deepEqual(protectedResult.stepsApplied, ["first", "regular"]);
+    assert.equal(protectedResult.commanderDamage["commander:later"], 7);
+    assert.equal(protectedResult.lifelinkGain, scenario.first.lifelinkGain + regular.lifelinkGain);
   }
 });
 

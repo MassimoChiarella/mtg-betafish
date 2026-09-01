@@ -11,8 +11,8 @@ export type CommanderBracket = 1 | 2 | 3 | 4 | 5;
 export type ResponseOption = "counter" | "protect" | "redirect" | "custom";
 
 export const opponentCommanderKey = (opponentId: string, slot: CommanderSlot = "primary") => slot === "primary"
-  ? `opponent:${opponentId}:commander`
-  : `opponent:${opponentId}:partner:commander`;
+  ? `opponent:${encodeURIComponent(opponentId.toWellFormed())}:commander`
+  : `opponent:${encodeURIComponent(opponentId.toWellFormed())}:partner:commander`;
 
 export const userCommanderKey = (slot: CommanderSlot) => `user:${slot}:commander`;
 
@@ -24,6 +24,7 @@ export type Opponent = {
   life: number;
   poisonCounters: number;
   commanderDamage: Record<string, number>;
+  lossProtected: boolean;
   eliminated: boolean;
 };
 
@@ -64,7 +65,7 @@ export type SimEvent = {
   threat?: Threat;
 };
 
-export type SignatureFollowUp = Pick<SimEvent, "sourceId" | "card">;
+export type SignatureFollowUp = Pick<SimEvent, "sourceId" | "card"> & Pick<Opponent, "profile" | "bracket">;
 
 export const SIGNATURE_REVEAL_TEMPLATE_ID = "table-development";
 export const SIGNATURE_USE_TEMPLATE_ID = "signature-card-encounter";
@@ -263,6 +264,11 @@ export type CombatResolution = CombatState & {
   lifelinkGain: number;
 };
 
+export type TrackedLoss = {
+  reason: Exclude<CombatResolution["lossReason"], null>;
+  lethalCommander: string | null;
+};
+
 /** Current Game Changers used by the bracket-specific core packages. */
 export const GAME_CHANGER_CARDS: ReadonlySet<string> = new Set([
   "Ancient Tomb", "Aura Shards", "Biorhythm", "Bolas’s Citadel", "Cyclonic Rift", "Enlightened Tutor",
@@ -284,10 +290,10 @@ export const CARD_LIBRARY = [
 ] as const;
 
 export const EVENT_TEMPLATES: EventTemplate[] = [
-  { id: "early-rock", kind: "targeted", minTurn: 1, title: "Your early mana is checked.", prompt: "Destroy an artifact or enchantment you control, prioritizing your most useful mana source. Its controller gains 4 life. If there is no legal artifact or enchantment target, the spell cannot be cast.", card: "Nature’s Claim", tags: ["Destroy", "Mana"], responseOptions: ["counter", "protect", "redirect", "custom"], emptyOutcome: "The spell could not be cast because there was no legal artifact or enchantment target." },
-  { id: "destroy-creature", kind: "targeted", minTurn: 2, title: "Your best creature is targeted.", prompt: "Destroy your highest-power noncommander creature. Its controller creates a 3/3 green Beast creature token. Counter it, resolve a legal protection effect, or let it resolve.", card: "Beast Within", tags: ["Destroy", "Creature"], responseOptions: ["counter", "protect", "redirect", "custom"], emptyOutcome: "The spell could not be cast because there was no legal permanent target." },
-  { id: "exile-commander", kind: "targeted", minTurn: 3, title: "Exile your commander.", prompt: "Your commander is targeted for exile. Its controller gains life equal to its power. If it leaves, make the normal command-zone choice in your playtester.", card: "Swords to Plowshares", tags: ["Exile", "Commander"], responseOptions: ["counter", "protect", "redirect", "custom"], emptyOutcome: "The spell could not be cast because there was no legal creature target." },
-  { id: "remove-engine", kind: "targeted", minTurn: 3, title: "Your engine is exposed.", prompt: "Exile your most important nonland permanent, then the acting opponent loses 3 life. Can you counter it or resolve another legal answer?", card: "Anguished Unmaking", tags: ["Exile", "Permanent"], responseOptions: ["counter", "protect", "redirect", "custom"], emptyOutcome: "The spell could not be cast because there was no legal nonland permanent target." },
+  { id: "early-rock", kind: "targeted", minTurn: 1, title: "Your early mana is checked.", prompt: "Destroy an artifact or enchantment you control, prioritizing your most useful mana source. Its controller gains 4 life. If you control no applicable object, record that outcome; another player may still provide a legal target.", card: "Nature’s Claim", tags: ["Destroy", "Mana"], responseOptions: ["counter", "protect", "redirect", "custom"], emptyOutcome: "You controlled no applicable artifact or enchantment. Resolve any other legal target in the multiplayer game in your playtester." },
+  { id: "destroy-creature", kind: "targeted", minTurn: 2, title: "Your best creature is targeted.", prompt: "Destroy your highest-power noncommander creature. Its controller creates a 3/3 green Beast creature token. Counter it, resolve a legal protection effect, or let it resolve.", card: "Beast Within", tags: ["Destroy", "Creature"], responseOptions: ["counter", "protect", "redirect", "custom"], emptyOutcome: "You controlled no applicable noncommander creature for this scenario. Resolve any other legal permanent target in the multiplayer game in your playtester." },
+  { id: "exile-commander", kind: "targeted", minTurn: 3, title: "Exile your commander.", prompt: "Your commander is targeted for exile. Its controller gains life equal to its power. If it leaves, make the normal command-zone choice in your playtester.", card: "Swords to Plowshares", tags: ["Exile", "Commander"], responseOptions: ["counter", "protect", "redirect", "custom"], emptyOutcome: "Your commander was not an applicable target. Resolve any other legal creature target in the multiplayer game in your playtester." },
+  { id: "remove-engine", kind: "targeted", minTurn: 3, title: "Your engine is exposed.", prompt: "Exile your most important nonland permanent, then the acting opponent loses 3 life. Can you counter it or resolve another legal answer?", card: "Anguished Unmaking", tags: ["Exile", "Permanent"], responseOptions: ["counter", "protect", "redirect", "custom"], emptyOutcome: "You controlled no applicable nonland permanent. Resolve any other legal nonland permanent target in the multiplayer game in your playtester." },
   { id: "destroy-wipe", kind: "wipe", minTurn: 5, title: "Destroy all creatures.", prompt: "Destroy all creatures. They can’t be regenerated. Resolve counters, indestructible, or another legal protection effect in your playtester.", card: "Wrath of God", tags: ["Board wipe", "Destroy"], responseOptions: ["counter", "protect", "custom"], emptyOutcome: "No creature you control was affected when the table action resolved." },
   { id: "minus-wipe", kind: "wipe", minTurn: 5, title: "The board gets −X/−X.", prompt: "The acting opponent pays X life as an additional cost. Give each creature −X/−X until end of turn, where X is the greatest toughness among creatures you control. Indestructible does not stop this.", card: "Toxic Deluge", tags: ["Board wipe", "Toughness"], responseOptions: ["counter", "protect", "custom"], emptyOutcome: "No creature you control was affected when the table action resolved." },
   { id: "living-death", kind: "wipe", minTurn: 5, title: "The battlefield and graveyards trade places.", prompt: "Exile creature cards from graveyards, sacrifice creatures, then return the exiled cards. Resolve the exact Living Death sequence in your playtester.", card: "Living Death", tags: ["Board wipe", "Graveyard"], responseOptions: ["counter", "protect", "custom"], emptyOutcome: "No creature card or creature you control changed zones during resolution." },
@@ -304,13 +310,38 @@ export const EVENT_TEMPLATES: EventTemplate[] = [
   { id: "combat-clock", kind: "threat", minTurn: 1, title: "A lethal combat turn is coming.", prompt: "The creature deck is building a lethal overrun. Remove the enabler or hold up a fog before the countdown expires.", card: "Craterhoof Behemoth", tags: ["Game-ending", "Combat"], responseOptions: ["custom"], emptyOutcome: "The combat setup is no longer a live threat." },
 ];
 
+export function gameChangerIdentity(card: string) {
+  return card === "Thassa’s Oracle line" ? "Thassa’s Oracle" : card;
+}
+
+const scenarioGameChangers = EVENT_TEMPLATES
+  .filter(({ gameChanger }) => gameChanger)
+  .map(({ card }) => gameChangerIdentity(card));
+
+export const BRACKET_THREE_GAME_CHANGERS = Object.fromEntries(Object.entries(DECK_PROFILES).map(([profileId, profile]) => [
+  profileId,
+  [...new Set([
+    ...profile.coreCards[3].filter((card) => GAME_CHANGER_CARDS.has(card)),
+    ...scenarioGameChangers,
+  ])].slice(0, 3),
+])) as unknown as Record<ProfileId, readonly string[]>;
+
+function isTemplateEligible(template: EventTemplate, profile: ProfileId, bracket: CommanderBracket, effectiveTurn: number) {
+  if (template.minTurn > effectiveTurn) return false;
+  if (!template.gameChanger) return true;
+  if (bracket < 3) return false;
+  return bracket > 3 || BRACKET_THREE_GAME_CHANGERS[profile].includes(gameChangerIdentity(template.card));
+}
+
 /** Supplies deterministic response metadata when migrating pre-v5 events. */
 export function responseMetadataForEvent(templateId: string, kind: EventKind): Pick<SimEvent, "responseOptions" | "emptyOutcome"> | null {
-  if (kind === "attack" || kind === "development") return { responseOptions: [] };
-  if (kind === "signature" && templateId === SIGNATURE_USE_TEMPLATE_ID) return {
+  if (templateId === "scaled-attack") return kind === "attack" ? { responseOptions: [] } : null;
+  if (templateId === SIGNATURE_REVEAL_TEMPLATE_ID) return kind === "development" ? { responseOptions: [] } : null;
+  if (templateId === SIGNATURE_USE_TEMPLATE_ID) return kind === "signature" ? {
     responseOptions: ["custom"],
     emptyOutcome: "There was no legal opportunity to use the revealed card in the current playtest state.",
-  };
+  } : null;
+  if (kind === "attack" || kind === "development") return { responseOptions: [] };
   const template = EVENT_TEMPLATES.find((candidate) => candidate.id === templateId);
   if (template) return { responseOptions: [...template.responseOptions], emptyOutcome: template.emptyOutcome };
   return null;
@@ -360,6 +391,14 @@ function safeDamageMap(value: unknown) {
   return Object.fromEntries(Object.entries(value).filter(([source]) => source.length > 0).map(([source, damage]) => [source, safeAmount(damage)]));
 }
 
+export function evaluateTrackedLoss(state: CombatState, lossProtected = false): TrackedLoss | null {
+  if (lossProtected) return null;
+  if (safeLife(state?.life) <= 0) return { reason: "life", lethalCommander: null };
+  if (safeAmount(state?.poisonCounters) >= 10) return { reason: "poison", lethalCommander: null };
+  const lethalCommander = Object.entries(safeDamageMap(state?.commanderDamage)).find(([, damage]) => damage >= 21)?.[0];
+  return lethalCommander ? { reason: "commander", lethalCommander } : null;
+}
+
 function weightedPick<T extends string>(random: () => number, weights: Record<T, number>): T {
   const entries = Object.entries(weights) as [T, number][];
   const total = entries.reduce((sum, [, weight]) => sum + Math.max(0, weight), 0);
@@ -374,7 +413,7 @@ function weightedPick<T extends string>(random: () => number, weights: Record<T,
 function chooseKeyword(random: () => number, excluded: Keyword[] = []): Keyword {
   const weights: Record<Keyword, number> = {
     Flying: 24, Trample: 20, Menace: 12, Vigilance: 10, Deathtouch: 9,
-    "First strike": 9, Haste: 8, Lifelink: 5, "Double strike": 3, Reach: 1, Infect: 0,
+    "First strike": 9, Haste: 8, Lifelink: 5, "Double strike": 3, Reach: 1, Infect: 1,
   };
   excluded.forEach((keyword) => { weights[keyword] = 0; });
   return weightedPick(random, weights);
@@ -394,7 +433,7 @@ export function eventKindWeights(input: { turn: number; profile: ProfileId; brac
   const bracketRules = COMMANDER_BRACKETS[bracket];
   const profile = DECK_PROFILES[input.profile];
   const effectiveTurn = Math.max(1, input.turn + bracketRules.turnOffset);
-  const eligibleKinds = new Set(EVENT_TEMPLATES.filter((template) => template.minTurn <= effectiveTurn && (bracket >= 3 || !template.gameChanger)).map((template) => template.kind));
+  const eligibleKinds = new Set(EVENT_TEMPLATES.filter((template) => isTemplateEligible(template, input.profile, bracket, effectiveTurn)).map((template) => template.kind));
   // Exponents and the attack factor are tuning constants, not official Magic rules.
   const interactionScale = bracketRules.interaction ** 4;
   return {
@@ -435,7 +474,7 @@ function generateCombatDeclaration(random: () => number, turn: number, source: O
     graveyard: ["Reanimated threat", "Sacrifice fodder", "Graveborn attacker"],
   };
 
-  return powers.map((power, index) => {
+  const attackers: Attacker[] = powers.map((power, index) => {
     const keywords: Keyword[] = [];
     if (random() < band.keyword) keywords.push(chooseKeyword(random));
     if (turn >= 7 && random() < band.keyword * .34) keywords.push(chooseKeyword(random, keywords));
@@ -451,6 +490,22 @@ function generateCombatDeclaration(random: () => number, turn: number, source: O
       commanderLabel: isCommander ? `${source.name}’s commander` : undefined,
     };
   });
+
+  if (commanderIndex >= 0) {
+    const firstSlot: CommanderSlot = random() < .25 ? "partner" : "primary";
+    const slots: Array<[number, CommanderSlot]> = [[commanderIndex, firstSlot]];
+    if (count > 1 && random() < .2) {
+      const candidate = intBetween(random, 0, count - 2);
+      slots.push([candidate >= commanderIndex ? candidate + 1 : candidate, firstSlot === "primary" ? "partner" : "primary"]);
+    }
+    const sourceName = source.name.trim() || "Opponent";
+    for (const [index, slot] of slots) {
+      const label = `${sourceName}’s ${slot === "primary" ? "primary commander" : "partner commander"}`;
+      Object.assign(attackers[index], { name: label, isCommander: true, commanderId: opponentCommanderKey(source.id, slot), commanderLabel: label });
+    }
+  }
+
+  return attackers;
 }
 
 /**
@@ -472,15 +527,20 @@ export function generateEvent(input: {
   const livingOpponents = input.opponents.filter((opponent) => !opponent.eliminated);
   if (!livingOpponents.length) throw new Error("Cannot generate an event without a living opponent.");
   const random = rngFor(`${seed}:${turn}:${counter}`);
+  const eventId = `event-${turn}-${counter}`;
   const signatureFollowUp = input.signatureFollowUp;
   const signatureSource = signatureFollowUp
     ? livingOpponents.find((opponent) => opponent.id === signatureFollowUp.sourceId)
     : undefined;
-  if (signatureFollowUp && signatureSource && DECK_PROFILES[signatureSource.profile].coreCards[normalizeCommanderBracket(signatureSource.bracket)].includes(signatureFollowUp.card)) {
+  if (signatureFollowUp
+    && signatureSource
+    && signatureSource.profile === signatureFollowUp.profile
+    && normalizeCommanderBracket(signatureSource.bracket) === normalizeCommanderBracket(signatureFollowUp.bracket)
+    && DECK_PROFILES[signatureSource.profile].coreCards[normalizeCommanderBracket(signatureSource.bracket)].includes(signatureFollowUp.card)) {
     const bracket = normalizeCommanderBracket(signatureSource.bracket);
     const card = signatureFollowUp.card;
     return {
-      id: `event-${turn}-${counter}`,
+      id: eventId,
       templateId: SIGNATURE_USE_TEMPLATE_ID,
       kind: "signature",
       sourceId: signatureSource.id,
@@ -499,9 +559,8 @@ export function generateEvent(input: {
   const bracketRules = COMMANDER_BRACKETS[bracket];
   const coreCards = profile.coreCards[bracket];
   const effectiveTurn = Math.max(1, turn + bracketRules.turnOffset);
-  const eventId = `event-${turn}-${counter}`;
 
-  const isEligible = (template: EventTemplate) => template.minTurn <= effectiveTurn && (bracket >= 3 || !template.gameChanger);
+  const isEligible = (template: EventTemplate) => isTemplateEligible(template, source.profile, bracket, effectiveTurn);
   const eventWeights = eventKindWeights({ turn, profile: source.profile, bracket, activeThreat, combatResolvedTurn });
   const kind = weightedPick(random, eventWeights);
 
@@ -514,9 +573,9 @@ export function generateEvent(input: {
       sourceId: source.id,
       sourceName: source.name,
       title: `${source.name} declares ${attackers.length === 1 ? "one attacker" : `all ${attackers.length} attackers`} at you.`,
-      prompt: "These are all attackers declared at you for this combat. Resolve blocks and interaction once, then record each combat-damage step. Ordinary generation produces at most one combat each turn; record externally created extra combats separately.",
+      prompt: "These are all attackers declared at you for this combat. Resolve blocks and interaction once, then record each combat-damage step. Ordinary generation produces at most one combat each round; record externally created extra combats separately.",
       card: `${PROFILE_LABELS[source.profile]} combat`,
-      tags: ["Combat", "One generated combat this turn", `B${bracket} ${bracketRules.label}`, `Turn ${turn} scaling`],
+      tags: ["Combat", "One generated combat this round", `B${bracket} ${bracketRules.label}`, `Round ${turn} scaling`],
       responseOptions: [],
       attackers,
     };
@@ -614,6 +673,19 @@ function addCommanderHit(damage: Record<string, number>, source: string, amount:
   Object.defineProperty(damage, source, { value: addAmounts(current, amount), enumerable: true, configurable: true, writable: true });
 }
 
+function combineCombatDamageStep(steps: readonly CombatDamageStep[], stepName: CombatDamageStep["step"]): CombatDamageStep | null {
+  let combined: CombatDamageStep | null = null;
+  for (const candidate of steps) {
+    if (candidate?.step !== stepName) continue;
+    combined ??= { step: stepName, lifeDamage: 0, commanderHits: {}, poisonCounters: 0, lifelinkGain: 0 };
+    combined.lifeDamage = addAmounts(combined.lifeDamage, safeAmount(candidate.lifeDamage));
+    combined.poisonCounters = addAmounts(combined.poisonCounters, safeAmount(candidate.poisonCounters));
+    combined.lifelinkGain = addAmounts(combined.lifelinkGain, safeAmount(candidate.lifelinkGain));
+    Object.entries(safeDamageMap(candidate.commanderHits)).forEach(([source, damage]) => addCommanderHit(combined!.commanderHits, source, damage));
+  }
+  return combined;
+}
+
 /** Builds editable full-attack defaults without inferring blocks, prevention, or replacement effects. */
 export function buildDefaultCombatDamageSteps(attackers: readonly Attacker[], fallbackCommanderId?: string): CombatDamageStep[] {
   const first: CombatDamageStep = { step: "first", lifeDamage: 0, commanderHits: {}, poisonCounters: 0, lifelinkGain: 0 };
@@ -649,7 +721,7 @@ export function buildDefaultCombatDamageSteps(attackers: readonly Attacker[], fa
 export function resolveCombatDamage(input: {
   state: CombatState;
   steps: readonly CombatDamageStep[];
-  lossPrevented?: boolean;
+  lossProtected?: boolean;
 }): CombatResolution {
   let life = safeLife(input.state?.life);
   let poisonCounters = safeAmount(input.state?.poisonCounters);
@@ -664,7 +736,7 @@ export function resolveCombatDamage(input: {
   let lethalCommander: string | null = null;
 
   for (const stepName of ["first", "regular"] as const) {
-    const step = steps.find((candidate) => candidate?.step === stepName);
+    const step = combineCombatDamageStep(steps, stepName);
     if (!step) continue;
     const stepLifeDamage = safeAmount(step.lifeDamage);
     const stepPoison = safeAmount(step.poisonCounters);
@@ -677,12 +749,11 @@ export function resolveCombatDamage(input: {
     lifelinkGain = addAmounts(lifelinkGain, stepLifelink);
     stepsApplied.push(stepName);
 
-    const lethalEntry = Object.entries(commanderDamage).find(([, damage]) => damage >= 21);
-    const reason = life <= 0 ? "life" : poisonCounters >= 10 ? "poison" : lethalEntry ? "commander" : null;
-    if (reason && input.lossPrevented !== true) {
+    const loss = evaluateTrackedLoss({ life, poisonCounters, commanderDamage }, input.lossProtected);
+    if (loss) {
       defeated = true;
-      lossReason = reason;
-      lethalCommander = reason === "commander" ? lethalEntry?.[0] ?? null : null;
+      lossReason = loss.reason;
+      lethalCommander = loss.lethalCommander;
       break;
     }
   }

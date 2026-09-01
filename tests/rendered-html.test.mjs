@@ -5,6 +5,7 @@ import worker from "../dist/server/index.js";
 
 const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 const cssSource = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+const storageSource = await readFile(new URL("../app/storage-session.ts", import.meta.url), "utf8");
 
 function sourceSection(source, start, end) {
   const startAt = source.indexOf(start);
@@ -32,7 +33,7 @@ test("server-renders the MTG Betafish product shell and social metadata", async 
   assert.match(html, /Assign your combat damage/);
   assert.match(html, /Scenario library/);
   assert.match(html, /Response window open/);
-  assert.match(html, /Rules reference:/);
+  assert.match(html, /Scenario card:/);
   assert.match(html, /Poison/);
   assert.match(html, /21 or more combat damage by the same commander/);
   assert.match(html, /https:\/\/mtg-betafish\.example\/og\.png/);
@@ -43,25 +44,26 @@ test("server-renders the MTG Betafish product shell and social metadata", async 
   assert.ok(encounter >= 0 && encounter < opponents && opponents < pressure, "mobile DOM order should be encounter, opponents, pressure");
 });
 
-test("game-over recovery preserves the expired turn event, undo, and explicit answer total", () => {
+test("game-over recovery preserves the expired round event, undo, correction, and explicit answer total", () => {
   const continuation = sourceSection(pageSource, "function continueAfterGameOver()", "function adjustLife(");
   assert.match(continuation, /eventCounter = addSafeInteger\(previous\.eventCounter, 1\)/);
   assert.match(continuation, /currentEvent: generateEvent\(\{[\s\S]*?turn: previous\.turn,/);
+  assert.match(continuation, /signatureFollowUp: signatureFollowUpFor\(previous\)/);
   assert.match(continuation, /responseStage: "prompt"/);
 
-  const terminal = sourceSection(pageSource, "{game.gameOver && (", "</main>");
+  const terminal = sourceSection(pageSource, "{game.gameOver && !activeModal && (", "</main>");
   assert.match(terminal, /onClose=\{continueAfterGameOver\}/);
   assert.match(terminal, /!tableDefeated && !userDefeated && <button[^>]+onClick=\{continueAfterGameOver\}>Continue anyway<\/button>/);
   assert.doesNotMatch(terminal, /Continue — an effect prevents this loss/);
-  assert.match(terminal, /resubmit the damage with the loss-prevention override so every ordered damage step is applied/);
+  assert.match(terminal, /correct the affected player/);
+  assert.match(terminal, /onClick=\{\(\) => openCorrection\(terminalCorrectionTarget\)\}>Correct tracked totals/);
   assert.match(terminal, /\{canUndo && <button[^>]+onClick=\{undo\}>Undo last change<\/button>\}/);
   assert.match(terminal, /<b>\{game\.answeredCount\}<\/b> threats\/actions answered/);
   assert.doesNotMatch(pageSource, /game\.history\.filter\([^\n]+answered/);
 
   const hydration = sourceSection(pageSource, "// Persistence is best-effort", "// Move focus only");
-  assert.match(hydration, /decodeGameState\(JSON\.parse\(saved\)\)/);
-  assert.match(hydration, /if \(!decoded\) window\.localStorage\.removeItem\(STORAGE_KEY\)/);
-  assert.match(pageSource, /resolveEvent\("Action answered", event\.kind === "signature" \? `\$\{event\.card\}: \$\{labels\[answer\]\}` : labels\[answer\], "success", \{\}, true\)/);
+  assert.match(hydration, /readStoredSession\(saved\)/);
+  assert.match(hydration, /window\.localStorage\.removeItem\(STORAGE_KEY\)/);
   assert.match(pageSource, /applyIncoming\(zeroCombatSteps\(incomingDamageSteps\), "Combat prevented", true\)/);
   assert.match(sourceSection(pageSource, "function stopThreat()", "function delayThreat()"), /answeredCount: addSafeInteger\(previous\.answeredCount, 1\)/);
   assert.match(sourceSection(pageSource, "function answerDefense()", "function applyOutgoingDamage("), /setDefenseAnswered\(true\)/);
@@ -76,10 +78,12 @@ test("resolved table settings allow follow-ups while preserving the combat lock"
   assert.match(settings, /const isFollowUp = previous\.responseStage === "resolved"/);
   assert.match(settings, /const generatedEvent = generateEvent\(\{/);
   assert.match(settings, /combatResolvedTurn: previous\.combatResolvedTurn/);
-  assert.match(settings, /title: `Follow-up action:/);
+  assert.match(settings, /signatureFollowUp: signatureFollowUpFor\(previous\)/);
+  assert.match(settings, /tags: \["Follow-up action", \.\.\.generatedEvent\.tags\]/);
+  assert.doesNotMatch(settings, /title: `Follow-up action:/);
   assert.match(incoming, /combatResolvedTurn: previous\.turn/);
   assert.doesNotMatch(hydration, /parsed\.currentEvent\.kind === "attack"/);
-  assert.match(hydration, /decodeGameState\(JSON\.parse\(saved\)\)/);
+  assert.match(hydration, /readStoredSession\(saved\)/);
 });
 
 test("table settings expose the selected profile and bracket core", () => {
@@ -101,27 +105,165 @@ test("signature-card reveals expose the exact card through the shared preview", 
   assert.match(presentation, /development: \{ label: "Signature card reveal"/);
   assert.match(presentation, /signature: \{ label: "Signature card encounter"/);
   assert.doesNotMatch(lookup, /kind === "development"/);
-  assert.match(encounter, /game\.currentEvent\.kind === "development" \|\| game\.currentEvent\.kind === "signature"/);
-  assert.match(encounter, /Revealed signature card in use:/);
-  assert.match(encounter, /<CardPreview name=\{game\.currentEvent\.card\} \/>/);
+  assert.match(encounter, /game\.currentEvent\.kind === "development" \|\| game\.currentEvent\.kind === "signature"[^\n]+<CardPreview name=\{game\.currentEvent\.card\} \/>/);
 });
 
 test("recorded signature-card reveals feed every next-event generation path exactly once", () => {
   const helper = sourceSection(pageSource, "function signatureFollowUpFor", "const EVENT_PRESENTATION");
+  assert.match(helper, /event\.kind === "development"/);
   const advance = sourceSection(pageSource, "function advanceTurn()", "function continueAfterGameOver()");
-  const continuation = sourceSection(pageSource, "function continueAfterGameOver()", "function adjustPlayerStat(");
+  const continuation = sourceSection(pageSource, "function continueAfterGameOver()", "function adjustLife(");
   const settings = sourceSection(pageSource, "function saveSettings()", "function openCombat()");
 
-  assert.match(helper, /state\.responseStage === "resolved"/);
   assert.match(helper, /event\.templateId === SIGNATURE_REVEAL_TEMPLATE_ID/);
+  assert.match(helper, /state\.responseStage === "resolved"/);
+  assert.match(helper, /profile: source\.profile, bracket: source\.bracket/);
   assert.doesNotMatch(helper, /SIGNATURE_USE_TEMPLATE_ID/);
   for (const source of [advance, continuation, settings]) {
     assert.match(source, /signatureFollowUp: signatureFollowUpFor\(previous\)/);
   }
 });
 
+test("ongoing loss protection is initialized, persisted, rechecked, and explicitly ended", () => {
+  const initial = sourceSection(pageSource, "const DEFAULT_OPPONENTS", "function historyEntry");
+  const incoming = sourceSection(pageSource, "function applyIncoming(", "function submitIncomingDamage(");
+  const outgoing = sourceSection(pageSource, "function applyOutgoingDamage(", "function undo()");
+  const advance = sourceSection(pageSource, "function advanceTurn()", "function continueAfterGameOver()");
+  const ending = sourceSection(pageSource, "function endLossProtection(", "function submitCorrection(");
+
+  assert.match(initial, /lossProtected: false/);
+  assert.match(initial, /userLossProtected: false/);
+  assert.match(incoming, /lossProtected = game\.userLossProtected/);
+  assert.match(incoming, /userLossProtected: lossProtected/);
+  assert.match(incoming, /evaluateTrackedLoss\(\{ life: result\.life, poisonCounters: result\.poisonCounters, commanderDamage: result\.commanderDamage \}, lossProtected\)/);
+  assert.match(outgoing, /evaluateTrackedLoss\(\{ life: result\.life, poisonCounters: result\.poisonCounters, commanderDamage: result\.commanderDamage \}, lossProtected\)/);
+  assert.match(advance, /previous\.userLossProtected/);
+  assert.match(advance, /opponent\.lossProtected/);
+  assert.match(ending, /userLossProtected: false/);
+  assert.match(ending, /lossProtected: false/);
+  assert.match(ending, /sourceEliminated = targetEliminated && previous\.responseStage !== "resolved"/);
+  assert.match(pageSource, /name="incoming-loss-protected"[^>]+defaultChecked=\{game\.userLossProtected\}/);
+  assert.match(pageSource, /name="outgoing-loss-protected"[^>]+defaultChecked=/);
+  assert.match(pageSource, />End effect<\/button>/);
+  assert.doesNotMatch(pageSource, /loss-prevented|lossPrevented/);
+});
+
+test("exact corrections restore safe players and keep every commander identity editable", () => {
+  const correction = sourceSection(pageSource, "function submitCorrection(", "function stopThreat()");
+  const modal = sourceSection(pageSource, '{activeModal === "totals"', '{activeModal === "reset"');
+
+  assert.match(correction, /safeIntegerFromForm\(data, "correction-life"/);
+  assert.match(correction, /damageFromForm\(data, "correction-poison"/);
+  assert.match(correction, /correction-commander-\$\{encodeURIComponent\(id\)\}/);
+  assert.match(correction, /data\.get\("correction-restore"\) === "on"/);
+  assert.match(correction, /const userLoss = trackedLossReason\("You"/);
+  assert.match(correction, /gameOver: tableDefeated \? "You eliminated every simulated opponent\." : userLoss/);
+  assert.match(correction, /sourceEliminated \? \[historyEntry\(previous, "Pending action cancelled", sourceResolution, "neutral"\)\] : \[\]/);
+  assert.match(modal, /Commander damage by original commander/);
+  assert.match(modal, /name="correction-loss-protected"/);
+  assert.match(modal, /name="correction-restore"/);
+  assert.match(pageSource, /\{game\.gameOver && !activeModal && \(/);
+  assert.match(pageSource, /id="tracked-player-user" tabIndex=\{-1\}/);
+});
+
+test("combat editor exposes optional ordered steps and unique original commander slots", () => {
+  const parser = sourceSection(pageSource, "function stepsFromForm(", "function zeroCombatSteps(");
+  const fields = sourceSection(pageSource, "function CombatDamageStepFields(", "export default function Home()");
+  const addAttacker = sourceSection(pageSource, "function addOutgoingAttacker(", "function removeOutgoingAttacker(");
+
+  assert.match(parser, /\["first", "regular"\][\s\S]*?filter\(\(step\) => data\.get\(damageStepEnabledName/);
+  assert.match(fields, /\(\["first", "regular"\] as const\)\.map/);
+  assert.match(fields, /type="checkbox" checked=\{enabled\}/);
+  assert.match(fields, /disabled=\{!enabled\}/);
+  assert.match(addAttacker, /usedCommanderSlots\.has\(attackerCommanderSlot\)/);
+  assert.match(addAttacker, /USER_COMMANDER_LABELS\[userCommanderKey\(attackerCommanderSlot\)\]/);
+  assert.match(pageSource, /Your primary commander<\/option>/);
+  assert.match(pageSource, /Your partner commander<\/option>/);
+  assert.match(pageSource, /const incomingCommanderLabels = \{[\s\S]*?Object\.fromEntries[\s\S]*?\.\.\.USER_COMMANDER_LABELS,[\s\S]*?\.\.\.opponentCommanderLabels,/);
+  assert.match(pageSource, /incomingCommanderLabels\[attacker\.commanderId \?\? ""\] \?\? attacker\.commanderLabel/);
+  assert.equal((pageSource.match(/<CommanderLedger damage=\{[^}]+\} labels=\{incomingCommanderLabels\}/g) ?? []).length, 2);
+  assert.match(pageSource, /name="incoming-answered"/);
+});
+
+test("local persistence uses revision envelopes, raw legacy reads, and explicit conflict choices", () => {
+  const reader = sourceSection(storageSource, "export function readStoredSession(", "export function decideStorageEvent(");
+  const persistence = sourceSection(pageSource, "// Persistence is best-effort", "// Move focus only");
+  const seededRun = sourceSection(pageSource, "function startSeededRun()", "function openCombat()");
+
+  assert.match(reader, /"revision" in parsed && "state" in parsed/);
+  assert.match(reader, /decodeGameState\(\(parsed as \{ state\?: unknown \}\)\.state\)/);
+  assert.match(reader, /decodeGameState\(parsed\)/);
+  assert.match(storageSource, /function serializeGameState\(state: GameState\)[\s\S]*?const decoded = decodeGameState\(state\)[\s\S]*?decoded \? JSON\.stringify\(decoded\) : null/);
+  assert.match(persistence, /const serialized = serializeGameState\(game\)/);
+  assert.match(persistence, /const currentSerialization = serializeGameState\(gameRef\.current\)/);
+  assert.match(persistence, /hasCompetingStoredSession\(stored, storageRevision\.current, savedSerialization\.current\)/);
+  assert.match(persistence, /stored\.revision === storageRevision\.current && stored\.serialized === savedSerialization\.current/);
+  assert.match(persistence, /nextStorageRevision\(storageRevision\.current\)[\s\S]*?writeStoredSession\(window\.localStorage/);
+  assert.match(persistence, /decideStorageEvent\(event\.newValue, window\.localStorage\.getItem\(STORAGE_KEY\)\)/);
+  assert.match(persistence, /setStorageConflict\(stored\)/);
+  assert.match(sourceSection(pageSource, "function loadSavedConflict()", "function keepLocalConflict()"), /newestStoredSession\(selected, raw\)[\s\S]*?currentStored \? selected\.serialized : ""/);
+  assert.match(sourceSection(pageSource, "function keepLocalConflict()", "// Move focus only"), /nextStorageRevision\(storageRevision\.current, storageConflict\.revision, stored\?\.revision \?\? 0\)/);
+  assert.equal((sourceSection(pageSource, "function loadSavedConflict()", "// Move focus only").match(/encounterHeading\.current\?\.focus\(\)/g) ?? []).length, 2);
+  assert.match(pageSource, /const storageConflictNotice = storageConflict \?/);
+  assert.match(pageSource, /\{!hasOpenDialog && storageConflictNotice\}/);
+  assert.equal((pageSource.match(/\{storageConflictNotice\}/g) ?? []).length, 6);
+  assert.match(pageSource, />Load saved version<\/button>/);
+  assert.match(pageSource, />Keep this tab<\/button>/);
+  assert.match(seededRun, /createInitialGame\(seed, opponents\)/);
+  assert.match(seededRun, /undoStack\.current = \[\]/);
+  assert.match(pageSource, />Start new run with this seed/);
+});
+
+test("state replacement clears Toxic input and table edits retain commander identity clarity", () => {
+  const commanderGuard = sourceSection(pageSource, "function hasTrackedCommanderDamageFromRemovedOpponent", "function trackedLossReason");
+  const loadConflict = sourceSection(pageSource, "function loadSavedConflict()", "function keepLocalConflict()");
+  const saveSettings = sourceSection(pageSource, "function saveSettings()", "function startSeededRun()");
+  const seededRun = sourceSection(pageSource, "function startSeededRun()", "function openCombat()");
+  const reset = sourceSection(pageSource, "function resetSession()", "const maxUserCommanderDamage");
+
+  assert.match(commanderGuard, /opponentCommanderKey\(opponent\.id\), opponentCommanderKey\(opponent\.id, "partner"\)/);
+  assert.match(commanderGuard, /retainedLedgers\.some\(\(ledger\) => \(ledger\[commanderId\] \?\? 0\) > 0\)/);
+  assert.match(saveSettings, /hasTrackedCommanderDamageFromRemovedOpponent\(game, opponents\)/);
+  assert.match(saveSettings, /Use Start new run with this seed to remove them without losing the original commander identity/);
+
+  for (const replacement of [loadConflict, saveSettings, seededRun, reset]) {
+    assert.match(replacement, /setToxicPaymentDraft\(\{ eventId: "", value: "0" \}\)/);
+    assert.match(replacement, /setToxicPaymentError\(""\)/);
+  }
+});
+
+test("tracked scenario outcomes and player-facing round language match the simulator contract", () => {
+  const accounting = sourceSection(pageSource, "function readToxicPayment(", "function letEventResolve()");
+  const resolution = sourceSection(pageSource, "function letEventResolve()", "function answerEvent(");
+  const answering = sourceSection(pageSource, "function answerEvent(", "function applyIncoming(");
+  const settings = sourceSection(pageSource, "function configuredSettingsOpponents()", "function saveSettings()");
+
+  assert.match(resolution, /event\.templateId === "early-rock"[\s\S]*?userLife: addSafeInteger\(previous\.userLife, 4\)/);
+  assert.match(accounting, /toxicPaymentDraft\.eventId === event\.id/);
+  assert.match(accounting, /const life = addSafeInteger\(opponent\.life, -amount\)/);
+  assert.match(accounting, /function recordEmptyOutcome\(\)[\s\S]*?"minus-wipe"[\s\S]*?"remove-engine"[\s\S]*?sourceLifeLossPatch/);
+  assert.match(accounting, /function beginResponse\(\)[\s\S]*?readToxicPayment\(event\)[\s\S]*?sourceLifeLossPatch[\s\S]*?responseStage: sourceEliminated \? "resolved" : "choose"/);
+  assert.match(accounting, /function resolveToxicFromPrompt\([\s\S]*?sourceEliminated[\s\S]*?spell was removed from the stack/);
+  assert.match(resolution, /event\.templateId === "remove-engine" \|\| event\.templateId === "minus-wipe"/);
+  assert.match(resolution, /paymentAlreadyRecorded/);
+  assert.doesNotMatch(answering, /readToxicPayment\(event\)/);
+  assert.match(answering, /Toxic Deluge’s \$\{lockedToxicPayment\}-life casting cost was already recorded/);
+  assert.match(answering, /event\.templateId === "remove-engine" && answer === "redirect"/);
+  assert.match(pageSource, /Owner: \{activeThreatOwner\.name\}/);
+  assert.match(settings, /new Set\(normalizedNames\)\.size !== normalizedNames\.length/);
+  assert.match(pageSource, /Scenario card:/);
+  assert.match(pageSource, />Generated action does not affect me<\/button>/);
+  assert.match(pageSource, /game\.currentEvent\.templateId === "minus-wipe" && game\.responseStage === "prompt"/);
+  assert.match(pageSource, /className="toxic-payment-locked"[\s\S]*?casting cost is paid and locked/);
+  assert.match(pageSource, /id="toxic-payment-error" role="alert"/);
+  assert.match(pageSource, />Next round /);
+  assert.match(pageSource, /Round \{entry\.turn\}/);
+  assert.doesNotMatch(pageSource, />Next turn |Rules reference:|Curated rules-reference library/);
+});
+
 test("accessible client contracts use one game-over announcement and native combat semantics", () => {
-  assert.equal(pageSource.match(/role="alert"/g)?.length ?? 0, 0);
+  assert.match(pageSource, /className="storage-conflict" role="alert" aria-labelledby="storage-conflict-title"/);
+  assert.match(pageSource, /id="storage-conflict-title" ref=\{storageConflictHeading\} tabIndex=\{-1\}/);
   assert.match(pageSource, /aria-live="polite" aria-atomic="true">\{game\.gameOver \? "" : liveMessage\}/);
   assert.equal(pageSource.match(/subtitle=\{game\.gameOver\}/g)?.length ?? 0, 1);
   assert.doesNotMatch(pageSource, /className="resolved-box" role="status"/);
@@ -162,7 +304,7 @@ test("mobile turn flow keeps context, existing controls, and touch targets reach
 
   const nextAction = pageSource.indexOf('className="next-action"');
   const opponents = pageSource.indexOf('className="rail opponents-panel"');
-  assert.ok(nextAction >= 0 && nextAction < opponents, "Next turn should precede the naturally stacked opponent rail");
+  assert.ok(nextAction >= 0 && nextAction < opponents, "Next round should precede the naturally stacked opponent rail");
   const header = sourceSection(pageSource, '<header className="topbar">', "</header>");
   const opponentRail = sourceSection(pageSource, '<aside className="rail opponents-panel"', "</aside>");
   const pressureRail = sourceSection(pageSource, '<aside className="rail pressure-panel"', "</aside>");
@@ -195,6 +337,7 @@ test("mobile turn flow keeps context, existing controls, and touch targets reach
   assert.match(cssSource, /\.modal \{[^}]*overflow-wrap: anywhere/);
   assert.match(cssSource, /\.encounter-card \{[^}]*overflow-wrap: anywhere/);
   assert.match(cssSource, /\.modal > \.modal-actions \{[^}]*position: sticky;[^}]*env\(safe-area-inset-bottom\)/);
+  assert.match(cssSource, /\[tabindex="-1"\] \{ scroll-margin-block: 96px 24px; \}/);
 });
 
 test("glossary previews stay separate from one-click game actions", () => {

@@ -4,6 +4,7 @@ import {
   buildDefaultCombatDamageSteps,
   COMMANDER_BRACKETS,
   counterBacks,
+  evaluateTrackedLoss,
   EVENT_TEMPLATES,
   generateEvent,
   KEYWORD_DEFINITIONS,
@@ -31,10 +32,20 @@ test("tracked amounts reject invalid numbers while ordered combat accepts safe r
   assert.equal(modified.life, 30, "a safe damage result is not capped by modeled power");
 });
 
+test("RC-01 shared tracked-loss evaluation respects ongoing protection", () => {
+  assert.equal(evaluateTrackedLoss(state()), null);
+  assert.deepEqual(evaluateTrackedLoss(state({ life: 0 })), { reason: "life", lethalCommander: null });
+  assert.deepEqual(evaluateTrackedLoss(state({ poisonCounters: 10 })), { reason: "poison", lethalCommander: null });
+  assert.deepEqual(evaluateTrackedLoss(state({ commanderDamage: { alpha: 21 } })), { reason: "commander", lethalCommander: "alpha" });
+  assert.equal(evaluateTrackedLoss(state({ life: 0, poisonCounters: 10, commanderDamage: { alpha: 21 } }), true), null);
+});
+
 test("primary commander keys remain compatible and Partner identities stay separate", () => {
   assert.equal(opponentCommanderKey("mara"), "opponent:mara:commander");
   assert.equal(opponentCommanderKey("mara", "primary"), "opponent:mara:commander");
   assert.equal(opponentCommanderKey("mara", "partner"), "opponent:mara:partner:commander");
+  assert.equal(opponentCommanderKey("550e8400-e29b-41d4-a716-446655440000"), "opponent:550e8400-e29b-41d4-a716-446655440000:commander");
+  assert.notEqual(opponentCommanderKey("x", "partner"), opponentCommanderKey("x:partner", "primary"));
   assert.notEqual(userCommanderKey("primary"), userCommanderKey("partner"));
 
   const primary = opponentCommanderKey("mara");
@@ -53,6 +64,11 @@ test("primary commander keys remain compatible and Partner identities stay separ
   assert.equal(lethal.defeated, true);
   assert.equal(lethal.lossReason, "commander");
   assert.equal(lethal.lethalCommander, primary);
+});
+
+test("commander keys normalize ill-formed Unicode instead of throwing", () => {
+  assert.doesNotThrow(() => opponentCommanderKey("\uD800"));
+  assert.equal(opponentCommanderKey("\uD800"), "opponent:%EF%BF%BD:commander");
 });
 
 test("double strike resolves first-strike damage and loss before regular damage", () => {
@@ -79,7 +95,7 @@ test("double strike resolves first-strike damage and loss before regular damage"
   assert.deepEqual(existingTen.stepsApplied, ["first"]);
 });
 
-test("nonlethal double strike applies both steps and loss prevention keeps later steps", () => {
+test("nonlethal double strike applies both steps and ongoing loss protection keeps later steps", () => {
   const commanderId = "commander:beta";
   const defaults = buildDefaultCombatDamageSteps([
     attacker({ power: 5, isCommander: true, commanderId, keywords: ["Double strike", "Lifelink"] }),
@@ -93,7 +109,7 @@ test("nonlethal double strike applies both steps and loss prevention keeps later
   const lethalDefaults = buildDefaultCombatDamageSteps([
     attacker({ power: 21, isCommander: true, commanderId, keywords: ["Double strike", "Lifelink"] }),
   ]);
-  const prevented = resolveCombatDamage({ state: state(), steps: lethalDefaults, lossPrevented: true });
+  const prevented = resolveCombatDamage({ state: state(), steps: lethalDefaults, lossProtected: true });
   assert.equal(prevented.life, -2);
   assert.equal(prevented.commanderDamage[commanderId], 42);
   assert.equal(prevented.lifelinkGain, 42);
@@ -161,6 +177,24 @@ test("the ordered resolver normalizes malformed step amounts at its public bound
   assert.equal(result.defeated, false);
 });
 
+test("RC-03 duplicate combat steps aggregate without losing data", () => {
+  const result = resolveCombatDamage({
+    state: state(),
+    steps: [
+      { step: "regular", lifeDamage: 3, commanderHits: { alpha: 4 }, poisonCounters: 1, lifelinkGain: 2 },
+      { step: "first", lifeDamage: 1, commanderHits: { beta: 2 }, poisonCounters: 0, lifelinkGain: 1 },
+      { step: "regular", lifeDamage: 4, commanderHits: { alpha: 5 }, poisonCounters: 2, lifelinkGain: 3 },
+      { step: "first", lifeDamage: 2, commanderHits: { beta: 3 }, poisonCounters: 1, lifelinkGain: 2 },
+    ],
+    lossProtected: true,
+  });
+  assert.deepEqual(result.stepsApplied, ["first", "regular"]);
+  assert.equal(result.life, 30);
+  assert.equal(result.poisonCounters, 4);
+  assert.deepEqual(result.commanderDamage, { beta: 5, alpha: 9 });
+  assert.equal(result.lifelinkGain, 8);
+});
+
 test("Menace defense never supplies a single blocker", () => {
   const result = rollDefense({
     profile: "swarm", bracket: 3, seed: "MENACE", turn: 3, counter: 4,
@@ -207,8 +241,9 @@ test("events expose intentional response metadata and corrected rules-reference 
     generatedCommander = event.attackers?.find(({ isCommander }) => isCommander);
   }
   assert.ok(generatedCommander);
-  assert.equal(generatedCommander.commanderId, opponentCommanderKey(opponent.id));
-  assert.equal(generatedCommander.commanderLabel, "One’s commander");
+  const generatedSlot = generatedCommander.commanderId === opponentCommanderKey(opponent.id, "partner") ? "partner" : "primary";
+  assert.equal(generatedCommander.commanderId, opponentCommanderKey(opponent.id, generatedSlot));
+  assert.equal(generatedCommander.commanderLabel, `One’s ${generatedSlot} commander`);
 });
 
 test("counterback rolls accept arbitrary exchange indices deterministically", () => {

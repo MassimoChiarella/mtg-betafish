@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  BRACKET_THREE_GAME_CHANGERS,
   buildDefaultCombatDamageSteps,
   COMMANDER_BRACKETS,
   counterBacks,
@@ -8,10 +9,12 @@ import {
   EVENT_TEMPLATES,
   eventKindWeights,
   GAME_CHANGER_CARDS,
+  gameChangerIdentity,
   generateEvent,
   GLOSSARY_DEFINITIONS,
   KEYWORD_DEFINITIONS,
   normalizeCommanderBracket,
+  opponentCommanderKey,
   resolveCombatDamage,
   rollDefense,
   SIGNATURE_REVEAL_TEMPLATE_ID,
@@ -23,6 +26,20 @@ const opponents = [
   { id: "one", name: "One", profile: "combo", bracket: 4, life: 40, commanderDamage: {}, eliminated: false },
   { id: "two", name: "Two", profile: "swarm", bracket: 2, life: 40, commanderDamage: {}, eliminated: false },
 ];
+
+function bracketThreeSequence(profile, seed, rounds = 20) {
+  const source = [{ id: "b3", name: "B3", profile, bracket: 3, life: 40, poisonCounters: 0, commanderDamage: {}, lossProtected: false, eliminated: false }];
+  const seen = new Set(DECK_PROFILES[profile].coreCards[3].filter((card) => GAME_CHANGER_CARDS.has(card)));
+  const recentTemplateIds = [];
+  for (let round = 1; round <= rounds; round += 1) {
+    const event = generateEvent({ turn: round, counter: round, seed, opponents: source, recentTemplateIds, activeThreat: false });
+    const identity = gameChangerIdentity(event.card);
+    if (GAME_CHANGER_CARDS.has(identity)) seen.add(identity);
+    recentTemplateIds.unshift(event.templateId);
+    recentTemplateIds.splice(3);
+  }
+  return seen;
+}
 
 test("glossary covers combat keywords and app terms", () => {
   for (const keyword of Object.keys(KEYWORD_DEFINITIONS)) assert.equal(typeof GLOSSARY_DEFINITIONS[keyword], "string");
@@ -53,7 +70,34 @@ test("a generated attack declares one atomic attacker batch", () => {
   assert.deepEqual(new Set(attackers.map(({ id }) => id.replace(/-attacker-\d+$/, ""))), new Set([event.id]));
   assert.equal(event.title, `One declares all ${attackers.length} attackers at you.`);
   assert.match(event.prompt, /all attackers.*once/i);
-  assert.ok(event.tags.includes("One generated combat this turn"));
+  assert.ok(event.tags.includes("One generated combat this round"));
+});
+
+test("RC-03/RC-07 generated combat reaches primary, Partner, both, and rare Infect", () => {
+  const source = [{ id: "partners", name: "Pair", profile: "voltron", bracket: 5, life: 40, poisonCounters: 0, commanderDamage: {}, lossProtected: false, eliminated: false }];
+  const primary = opponentCommanderKey("partners", "primary");
+  const partner = opponentCommanderKey("partners", "partner");
+  const identities = new Set();
+  const keywords = new Set();
+  let both = false;
+
+  for (let counter = 0; counter < 50_000; counter += 1) {
+    const event = generateEvent({ turn: 10, counter, seed: "PARTNER-INFECT", opponents: source, recentTemplateIds: [], activeThreat: false });
+    if (event.kind !== "attack") continue;
+    const commanders = event.attackers.filter(({ isCommander }) => isCommander);
+    const commanderIds = commanders.map(({ commanderId }) => commanderId);
+    assert.equal(new Set(commanderIds).size, commanderIds.length, `duplicate commander identity at counter ${counter}`);
+    for (const commander of commanders) {
+      identities.add(commander.commanderId);
+      assert.equal(commander.commanderLabel, commander.commanderId === primary ? "Pair’s primary commander" : "Pair’s partner commander");
+    }
+    if (commanderIds.includes(primary) && commanderIds.includes(partner)) both = true;
+    for (const attacker of event.attackers) for (const keyword of attacker.keywords) keywords.add(keyword);
+  }
+
+  assert.deepEqual(identities, new Set([primary, partner]));
+  assert.equal(both, true);
+  assert.deepEqual(keywords, new Set(Object.keys(KEYWORD_DEFINITIONS)));
 });
 
 test("resolved combat suppresses only attack weight for that turn", () => {
@@ -92,6 +136,7 @@ test("deck profiles expose distinct, bracket-safe three-card cores", () => {
   );
   assert.ok(GAME_CHANGER_CARDS.has("Biorhythm"));
   assert.equal(GAME_CHANGER_CARDS.has("Food Chain"), false);
+  assert.equal(gameChangerIdentity("Thassa’s Oracle line"), "Thassa’s Oracle");
 
   for (const [profileId, profile] of Object.entries(DECK_PROFILES)) {
     assert.deepEqual(Object.keys(profile.coreCards), ["1", "2", "3", "4", "5"]);
@@ -110,6 +155,24 @@ test("deck profiles expose distinct, bracket-safe three-card cores", () => {
     }
     assert.equal(packageSignatures.size, 5, `${profileId} should change its core at every bracket`);
     assert.equal(new Set(profileCards).size, 15, `${profileId} should not recycle cards between brackets`);
+
+    const b3GameChangers = BRACKET_THREE_GAME_CHANGERS[profileId];
+    assert.equal(new Set(b3GameChangers).size, b3GameChangers.length);
+    assert.ok(b3GameChangers.length <= 3, `${profileId} B3 must contain at most three Game Changers`);
+    assert.ok(b3GameChangers.every((card) => GAME_CHANGER_CARDS.has(card)));
+    for (const coreGameChanger of profile.coreCards[3].filter((card) => GAME_CHANGER_CARDS.has(card))) {
+      assert.ok(b3GameChangers.includes(coreGameChanger), `${profileId} must retain the B3 core Game Changer ${coreGameChanger}`);
+    }
+  }
+});
+
+test("RC-02 B3GC-EARLY-4530 and 100,000 B3 round-20 sequences stay within three Game Changers", () => {
+  assert.ok(bracketThreeSequence("midrange", "B3GC-EARLY-4530").size <= 3);
+  const profiles = Object.keys(DECK_PROFILES);
+  for (let sequence = 0; sequence < 100_000; sequence += 1) {
+    const profile = profiles[sequence % profiles.length];
+    const seen = bracketThreeSequence(profile, `B3-STRESS-${sequence}`);
+    assert.ok(seen.size <= 3, `${profile} seed ${sequence} surfaced ${[...seen].join(", ")}`);
   }
 });
 
@@ -148,6 +211,7 @@ test("every revealed core card forces the exact next signature-card encounter", 
         life: 40,
         poisonCounters: 0,
         commanderDamage: {},
+        lossProtected: false,
         eliminated: false,
       };
       for (const card of profile.coreCards[bracket]) {
@@ -158,7 +222,7 @@ test("every revealed core card forces the exact next signature-card encounter", 
           opponents: [source],
           recentTemplateIds: [SIGNATURE_REVEAL_TEMPLATE_ID],
           activeThreat: false,
-          signatureFollowUp: { sourceId: source.id, card },
+          signatureFollowUp: { sourceId: source.id, card, profile: source.profile, bracket: source.bracket },
         };
         const event = generateEvent(input);
 
@@ -183,19 +247,21 @@ test("stale or invalid signature follow-ups fall back to normal seeded generatio
     life: 40,
     poisonCounters: 0,
     commanderDamage: {},
+    lossProtected: false,
     eliminated: false,
   };
   const base = { turn: 8, counter: 22, seed: "STALE-SIGNATURE", opponents: [living], recentTemplateIds: [], activeThreat: false };
   const normal = generateEvent(base);
 
-  assert.deepEqual(generateEvent({ ...base, signatureFollowUp: { sourceId: "missing", card: "Counterspell" } }), normal);
-  assert.deepEqual(generateEvent({ ...base, signatureFollowUp: { sourceId: living.id, card: "Black Lotus" } }), normal);
-  assert.deepEqual(generateEvent({ ...base, signatureFollowUp: { sourceId: living.id, card: DECK_PROFILES.control.coreCards[4][0] } }), normal);
+  assert.deepEqual(generateEvent({ ...base, signatureFollowUp: { sourceId: "missing", card: "Counterspell", profile: "control", bracket: 3 } }), normal);
+  assert.deepEqual(generateEvent({ ...base, signatureFollowUp: { sourceId: living.id, card: "Black Lotus", profile: "control", bracket: 3 } }), normal);
+  assert.deepEqual(generateEvent({ ...base, signatureFollowUp: { sourceId: living.id, card: DECK_PROFILES.control.coreCards[4][0], profile: "control", bracket: 3 } }), normal);
+  assert.deepEqual(generateEvent({ ...base, opponents: [{ ...living, bracket: 4 }], signatureFollowUp: { sourceId: living.id, card: "The One Ring", profile: "midrange", bracket: 4 } }), generateEvent({ ...base, opponents: [{ ...living, bracket: 4 }] }));
 
   const eliminated = { ...living, id: "gone", eliminated: true };
   const withEliminated = { ...base, opponents: [eliminated, living] };
   assert.deepEqual(
-    generateEvent({ ...withEliminated, signatureFollowUp: { sourceId: eliminated.id, card: DECK_PROFILES.control.coreCards[3][0] } }),
+    generateEvent({ ...withEliminated, signatureFollowUp: { sourceId: eliminated.id, card: DECK_PROFILES.control.coreCards[3][0], profile: "control", bracket: 3 } }),
     generateEvent(withEliminated),
   );
 });
@@ -257,6 +323,20 @@ test("lower brackets never surface Game Changer scenarios", () => {
       assert.equal(gameChangerTemplates.has(event.templateId), false);
       assert.equal(GAME_CHANGER_CARDS.has(event.card), false);
     }
+  }
+});
+
+test("B4 and B5 retain every Game Changer scenario", () => {
+  const expected = new Set(EVENT_TEMPLATES.filter(({ gameChanger }) => gameChanger).map(({ id }) => id));
+  for (const bracket of [4, 5]) {
+    const seen = new Set();
+    for (const profile of Object.keys(DECK_PROFILES)) {
+      for (let counter = 0; counter < 5_000 && seen.size < expected.size; counter += 1) {
+        const event = generateEvent({ turn: 20, counter, seed: `UNRESTRICTED-${bracket}-${profile}`, opponents: [{ id: "high", name: "High", profile, bracket, life: 40, poisonCounters: 0, commanderDamage: {}, lossProtected: false, eliminated: false }], recentTemplateIds: [], activeThreat: false });
+        if (expected.has(event.templateId)) seen.add(event.templateId);
+      }
+    }
+    assert.deepEqual(seen, expected);
   }
 });
 

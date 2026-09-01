@@ -1,4 +1,7 @@
 import {
+  EVENT_TEMPLATES,
+  SIGNATURE_USE_TEMPLATE_ID,
+  evaluateTrackedLoss,
   opponentCommanderKey,
   responseMetadataForEvent,
   type Attacker,
@@ -11,7 +14,7 @@ import {
   type Threat,
 } from "./simulator.ts";
 
-export const GAME_STATE_VERSION = 5 as const;
+export const GAME_STATE_VERSION = 6 as const;
 
 export type ResponseStage = "prompt" | "choose" | "counterback" | "combat" | "resolved";
 export type HistoryTone = "success" | "damage" | "warning" | "neutral";
@@ -32,11 +35,13 @@ export type GameState = {
   seed: string;
   opponents: Opponent[];
   userLife: number;
+  userLossProtected: boolean;
   userPoisonCounters: number;
   userCommanderDamage: Record<string, number>;
   currentEvent: SimEvent;
   responseStage: ResponseStage;
   resolution: string;
+  toxicDelugePayment: { eventId: string; amount: number } | null;
   activeThreat: Threat | null;
   recentTemplateIds: string[];
   history: HistoryEntry[];
@@ -77,7 +82,7 @@ function isRecord(value: unknown): value is UnknownRecord {
 }
 
 function isNonemptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
+  return typeof value === "string" && value.isWellFormed() && value.trim().length > 0;
 }
 
 function isCount(value: unknown): value is number {
@@ -89,6 +94,14 @@ function readStringArray(value: unknown, nonempty = false): string[] | undefined
   return value.every((item) => typeof item === "string" && (!nonempty || item.trim().length > 0)) ? value.map(String) : undefined;
 }
 
+function hasUniqueStrings(values: readonly string[]): boolean {
+  return new Set(values).size === values.length;
+}
+
+function hasSameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 function readDamageLedger(value: unknown): Record<string, number> | undefined {
   if (!isRecord(value)) return undefined;
   const entries = Object.entries(value);
@@ -96,7 +109,7 @@ function readDamageLedger(value: unknown): Record<string, number> | undefined {
   return Object.fromEntries(entries) as Record<string, number>;
 }
 
-function readThreat(value: unknown, opponentIds: ReadonlySet<string>): Threat | undefined {
+function readThreat(value: unknown, opponentIds: ReadonlySet<string>, allowExpired = false): Threat | undefined {
   if (!isRecord(value)
     || !isNonemptyString(value.id)
     || !isNonemptyString(value.ownerId)
@@ -104,6 +117,7 @@ function readThreat(value: unknown, opponentIds: ReadonlySet<string>): Threat | 
     || typeof value.title !== "string"
     || typeof value.description !== "string"
     || !isCount(value.remaining)
+    || (!allowExpired && value.remaining === 0)
     || typeof value.delayed !== "boolean") return undefined;
 
   return {
@@ -130,10 +144,20 @@ function readOpponent(value: unknown, version: number): Opponent | undefined {
   const commanderDamage = readDamageLedger(value.commanderDamage);
   if (!BRACKETS.has(bracket) || !commanderDamage) return undefined;
 
-  const poisonCounters = version < GAME_STATE_VERSION
+  const poisonCounters = version < 5
     ? 0
     : isCount(value.poisonCounters) ? value.poisonCounters : undefined;
   if (poisonCounters === undefined) return undefined;
+  const hasUnprotectedLoss = evaluateTrackedLoss({
+    life: value.life,
+    poisonCounters,
+    commanderDamage,
+  }) !== null;
+  const lossProtected = version < GAME_STATE_VERSION
+    ? false
+    : typeof value.lossProtected === "boolean" ? value.lossProtected : undefined;
+  if (lossProtected === undefined
+    || (version === GAME_STATE_VERSION && hasUnprotectedLoss && !lossProtected && !value.eliminated)) return undefined;
 
   return {
     id: value.id,
@@ -143,7 +167,8 @@ function readOpponent(value: unknown, version: number): Opponent | undefined {
     life: value.life,
     commanderDamage,
     poisonCounters,
-    eliminated: value.eliminated,
+    lossProtected,
+    eliminated: value.eliminated || (version < GAME_STATE_VERSION && hasUnprotectedLoss),
   };
 }
 
@@ -165,7 +190,7 @@ function readAttacker(value: unknown, sourceId: string, sourceName: string, vers
     commanderId = value.commanderId;
   }
   if (value.commanderLabel !== undefined && !isNonemptyString(value.commanderLabel)) return undefined;
-  if (value.isCommander && version === GAME_STATE_VERSION && !commanderId) return undefined;
+  if (value.isCommander && version >= 5 && !commanderId) return undefined;
 
   const attacker: Attacker = {
     id: value.id,
@@ -177,7 +202,20 @@ function readAttacker(value: unknown, sourceId: string, sourceName: string, vers
   };
   if (value.isCommander) {
     attacker.commanderId = commanderId ?? opponentCommanderKey(sourceId);
-    attacker.commanderLabel = value.commanderLabel ?? `${sourceName}’s commander`;
+    const primaryId = opponentCommanderKey(sourceId);
+    const partnerId = opponentCommanderKey(sourceId, "partner");
+    const legacyLabel = `${sourceName}’s commander`;
+    if (attacker.commanderId === primaryId && (value.commanderLabel === undefined || value.commanderLabel === legacyLabel)) {
+      attacker.commanderLabel = `${sourceName}’s primary commander`;
+    } else if (attacker.commanderId === partnerId && value.commanderLabel === undefined) {
+      attacker.commanderLabel = `${sourceName}’s partner commander`;
+    } else if (value.commanderLabel !== undefined) {
+      attacker.commanderLabel = value.commanderLabel as string;
+    } else if (version < GAME_STATE_VERSION) {
+      attacker.commanderLabel = isNonemptyString(value.name) ? value.name : "Original commander identity";
+    } else {
+      return undefined;
+    }
   }
   return attacker;
 }
@@ -203,6 +241,9 @@ function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: nu
     if (!Array.isArray(value.attackers) || value.attackers.length === 0) return undefined;
     const parsed = value.attackers.map((rawAttacker) => readAttacker(rawAttacker, value.sourceId as string, value.sourceName as string, version));
     if (!parsed.every((attacker): attacker is Attacker => attacker !== undefined)) return undefined;
+    if (!hasUniqueStrings(parsed.map(({ id }) => id))) return undefined;
+    const commanderIds = parsed.flatMap(({ isCommander, commanderId }) => isCommander && commanderId ? [commanderId] : []);
+    if (!hasUniqueStrings(commanderIds)) return undefined;
     attackers = parsed;
   } else if (value.attackers !== undefined) {
     return undefined;
@@ -223,11 +264,51 @@ function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: nu
     responseOptions = options as ResponseOption[];
   }
   if (value.emptyOutcome !== undefined && typeof value.emptyOutcome !== "string") return undefined;
-  if (version === GAME_STATE_VERSION && !responseOptions) return undefined;
-  const metadata = responseOptions
-    ? { responseOptions, emptyOutcome: value.emptyOutcome as string | undefined }
-    : responseMetadataForEvent(value.templateId, value.kind as EventKind);
-  if (!metadata) return undefined;
+  if (version >= 5 && !responseOptions) return undefined;
+
+  const template = EVENT_TEMPLATES.find((candidate) => candidate.id === value.templateId);
+  const dynamicMetadata = template ? null : responseMetadataForEvent(value.templateId, value.kind as EventKind);
+  if ((value.templateId === "scaled-attack" && value.kind !== "attack")
+    || (value.templateId === "table-development" && value.kind !== "development")
+    || (value.templateId === SIGNATURE_USE_TEMPLATE_ID && value.kind !== "signature")) return undefined;
+  if (template && template.kind !== value.kind) return undefined;
+  if (template && version === GAME_STATE_VERSION
+    && (value.title !== template.title
+      || value.prompt !== template.prompt
+      || value.card !== template.card
+      || !responseOptions
+      || !hasSameStrings(responseOptions, template.responseOptions)
+      || value.emptyOutcome !== template.emptyOutcome)) return undefined;
+  if (value.kind === "signature"
+    && (!dynamicMetadata
+      || (version === GAME_STATE_VERSION
+        && (!responseOptions
+          || !hasSameStrings(responseOptions, dynamicMetadata.responseOptions)
+          || value.emptyOutcome !== dynamicMetadata.emptyOutcome)))) return undefined;
+
+  const metadata = template
+    ? { responseOptions: [...template.responseOptions], emptyOutcome: template.emptyOutcome }
+    : value.kind === "signature"
+      ? dynamicMetadata
+      : responseOptions
+        ? { responseOptions, emptyOutcome: value.emptyOutcome as string | undefined }
+        : dynamicMetadata;
+  if (!metadata || !hasUniqueStrings(metadata.responseOptions)) return undefined;
+
+  if ((value.kind === "attack" || value.kind === "development")
+    && (metadata.responseOptions.length > 0 || metadata.emptyOutcome !== undefined)) return undefined;
+  if (value.kind !== "attack" && value.kind !== "development" && metadata.responseOptions.length === 0) return undefined;
+
+  if (threat && template) {
+    if (version === GAME_STATE_VERSION
+      && (threat.ownerId !== value.sourceId || threat.title !== template.title || threat.description !== template.prompt)) return undefined;
+    threat = {
+      ...threat,
+      ownerId: value.sourceId,
+      title: template.title,
+      description: template.prompt,
+    };
+  }
 
   const event: SimEvent = {
     id: value.id,
@@ -235,9 +316,9 @@ function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: nu
     kind: value.kind as EventKind,
     sourceId: value.sourceId,
     sourceName: value.sourceName,
-    title: value.title,
-    prompt: value.prompt,
-    card: value.card,
+    title: template ? template.title : value.title,
+    prompt: template ? template.prompt : value.prompt,
+    card: template ? template.card : value.card,
     tags,
     responseOptions: metadata.responseOptions,
   };
@@ -260,9 +341,14 @@ function isHistoryEntry(value: unknown): value is HistoryEntry {
 }
 
 function readHistory(value: unknown): HistoryEntry[] | undefined {
-  return Array.isArray(value) && value.every(isHistoryEntry)
-    ? value.map(({ id, turn, title, detail, tone }) => ({ id, turn, title, detail, tone }))
-    : undefined;
+  if (!Array.isArray(value) || !value.every(isHistoryEntry) || !hasUniqueStrings(value.map(({ id }) => id))) return undefined;
+  return value.map(({ id, turn, title, detail, tone }) => ({ id, turn, title, detail, tone }));
+}
+
+function hasCompatibleStage(event: SimEvent, stage: ResponseStage): boolean {
+  if (event.kind === "attack") return stage === "prompt" || stage === "combat" || stage === "resolved";
+  if (event.kind === "development") return stage === "prompt" || stage === "resolved";
+  return stage !== "combat";
 }
 
 /**
@@ -279,16 +365,22 @@ export function decodeGameState(raw: unknown): GameState | null {
       || typeof raw.seed !== "string"
       || !Array.isArray(raw.opponents)
       || raw.opponents.length === 0
+      || raw.opponents.length > 3
       || typeof raw.userLife !== "number" || !Number.isSafeInteger(raw.userLife)
       || typeof raw.responseStage !== "string"
       || !RESPONSE_STAGES.has(raw.responseStage)
       || typeof raw.resolution !== "string"
-      || (raw.gameOver !== null && typeof raw.gameOver !== "string")) return null;
+      || (raw.gameOver !== null && !isNonemptyString(raw.gameOver))) return null;
 
     const opponents = raw.opponents.map((value) => readOpponent(value, version));
     if (!opponents.every((opponent): opponent is Opponent => opponent !== undefined)
       || new Set(opponents.map(({ id }) => id)).size !== opponents.length) return null;
     const opponentIds = new Set(opponents.map(({ id }) => id));
+    let gameOver = raw.gameOver as string | null;
+    if (opponents.every((opponent) => opponent.eliminated)) {
+      if (version === GAME_STATE_VERSION && gameOver === null) return null;
+      if (version < GAME_STATE_VERSION && gameOver === null) gameOver = "You eliminated every simulated opponent.";
+    }
 
     const userCommanderDamage = readDamageLedger(raw.userCommanderDamage);
     const currentEvent = readEvent(raw.currentEvent, opponentIds, version);
@@ -299,16 +391,70 @@ export function decodeGameState(raw: unknown): GameState | null {
     let activeThreat: Threat | null;
     if (raw.activeThreat === null) activeThreat = null;
     else {
-      const parsedThreat = readThreat(raw.activeThreat, opponentIds);
+      const legacyExpiredTerminal = version < GAME_STATE_VERSION && isNonemptyString(raw.gameOver);
+      const parsedThreat = readThreat(raw.activeThreat, opponentIds, legacyExpiredTerminal);
       if (!parsedThreat) return null;
-      activeThreat = parsedThreat;
+      activeThreat = parsedThreat.remaining === 0 ? null : parsedThreat;
+    }
+    if (version < GAME_STATE_VERSION && activeThreat && currentEvent.threat && activeThreat.id === currentEvent.threat.id) {
+      activeThreat = {
+        ...activeThreat,
+        ownerId: currentEvent.threat.ownerId,
+        title: currentEvent.threat.title,
+        description: currentEvent.threat.description,
+      };
+    }
+    if (version < GAME_STATE_VERSION && activeThreat && opponents.some((opponent) => opponent.id === activeThreat?.ownerId && opponent.eliminated)) {
+      activeThreat = null;
     }
 
     const eventSource = opponents.find((opponent) => opponent.id === currentEvent.sourceId);
+    let responseStage = raw.responseStage as ResponseStage;
+    let resolution = raw.resolution;
+    let counterExchange = version < 5
+      ? responseStage === "counterback" ? 1 : 0
+      : isCount(raw.counterExchange) ? raw.counterExchange : undefined;
+    if (counterExchange === undefined) return null;
+    if (version < GAME_STATE_VERSION && eventSource?.eliminated && responseStage !== "resolved") {
+      responseStage = "resolved";
+      resolution = `${eventSource.name} left the game, so their pending action was removed from the stack or combat during migration.`;
+      counterExchange = 0;
+    }
+    let toxicDelugePayment: GameState["toxicDelugePayment"] = null;
+    const missingToxicDelugePayment = raw.toxicDelugePayment === undefined;
+    if (version === GAME_STATE_VERSION) {
+      if (!missingToxicDelugePayment && raw.toxicDelugePayment !== null) {
+        if (!isRecord(raw.toxicDelugePayment)
+          || !isNonemptyString(raw.toxicDelugePayment.eventId)
+          || !isCount(raw.toxicDelugePayment.amount)) return null;
+        toxicDelugePayment = { eventId: raw.toxicDelugePayment.eventId, amount: raw.toxicDelugePayment.amount };
+      }
+    }
+    if (currentEvent.templateId === "minus-wipe"
+      && (responseStage === "choose" || responseStage === "counterback")
+      && !toxicDelugePayment
+      && (version < GAME_STATE_VERSION || missingToxicDelugePayment)) {
+      responseStage = "prompt";
+      resolution = "Re-enter Toxic Deluge’s life payment before opening the response window.";
+      counterExchange = 0;
+    }
+    if ((toxicDelugePayment && (currentEvent.templateId !== "minus-wipe" || toxicDelugePayment.eventId !== currentEvent.id || responseStage === "prompt"))
+      || (currentEvent.templateId === "minus-wipe" && (responseStage === "choose" || responseStage === "counterback") && !toxicDelugePayment)) return null;
     const threatOwner = activeThreat ? opponents.find((opponent) => opponent.id === activeThreat.ownerId) : undefined;
-    if ((activeThreat && threatOwner?.eliminated)
-      || (raw.responseStage !== "resolved" && eventSource?.eliminated)
-      || (raw.responseStage === "counterback" && !currentEvent.responseOptions.includes("counter"))) return null;
+    const currentThreat = currentEvent.threat;
+    if (currentEvent.sourceName !== eventSource?.name
+      || !hasCompatibleStage(currentEvent, responseStage)
+      || (currentThreat && currentThreat.ownerId !== currentEvent.sourceId)
+      || (activeThreat && (!threatOwner || threatOwner.eliminated))
+      || (responseStage !== "resolved" && eventSource?.eliminated)
+      || (responseStage === "counterback"
+        && (!currentEvent.responseOptions.includes("counter") || counterExchange === 0))
+      || (currentThreat && activeThreat
+        && (responseStage !== "resolved"
+          || currentThreat.id !== activeThreat.id
+          || currentThreat.ownerId !== activeThreat.ownerId
+          || currentThreat.title !== activeThreat.title
+          || currentThreat.description !== activeThreat.description))) return null;
 
     const answeredCount = version < 3
       ? history.filter((entry) => ANSWERED_TITLES.has(entry.title)).length
@@ -326,13 +472,26 @@ export function decodeGameState(raw: unknown): GameState | null {
       return null;
     }
 
-    const userPoisonCounters = version < GAME_STATE_VERSION
+    const userPoisonCounters = version < 5
       ? 0
       : isCount(raw.userPoisonCounters) ? raw.userPoisonCounters : undefined;
-    const counterExchange = version < GAME_STATE_VERSION
-      ? 0
-      : isCount(raw.counterExchange) ? raw.counterExchange : undefined;
-    if (userPoisonCounters === undefined || counterExchange === undefined) return null;
+    const userLossProtected = version < GAME_STATE_VERSION
+      ? false
+      : typeof raw.userLossProtected === "boolean" ? raw.userLossProtected : undefined;
+    if (userPoisonCounters === undefined || counterExchange === undefined || userLossProtected === undefined) return null;
+    const userLoss = evaluateTrackedLoss({
+      life: raw.userLife,
+      poisonCounters: userPoisonCounters,
+      commanderDamage: userCommanderDamage,
+    }, userLossProtected);
+    if (version === GAME_STATE_VERSION && gameOver === null && userLoss) return null;
+    if (version < GAME_STATE_VERSION && gameOver === null && userLoss) {
+      gameOver = userLoss.reason === "life"
+        ? `You reached ${raw.userLife} life.`
+        : userLoss.reason === "poison"
+          ? `You reached ${userPoisonCounters} poison counters.`
+          : "You reached 21 commander damage from one commander.";
+    }
 
     return {
       version: GAME_STATE_VERSION,
@@ -342,18 +501,20 @@ export function decodeGameState(raw: unknown): GameState | null {
       seed: raw.seed,
       opponents,
       userLife: raw.userLife,
+      userLossProtected,
       userPoisonCounters,
       userCommanderDamage,
       currentEvent,
-      responseStage: raw.responseStage as ResponseStage,
-      resolution: raw.resolution,
+      responseStage,
+      resolution,
+      toxicDelugePayment,
       activeThreat,
       recentTemplateIds,
       history,
       answeredCount,
       combatResolvedTurn,
       counterExchange,
-      gameOver: raw.gameOver,
+      gameOver,
     };
   } catch {
     return null;
