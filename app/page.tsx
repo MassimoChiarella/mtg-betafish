@@ -1596,6 +1596,7 @@ export default function Home() {
 
       <header className="topbar">
         <a className="brand" href="#main-workspace" aria-label="MTG Betafish — jump to table workspace">
+          <span className="brand-fish" aria-hidden="true" />
           <span className="brand-title"><strong>MTG</strong><small>Betafish</small></span>
         </a>
         <div className="turn-strip" aria-label={`Round ${game.turn}`}>

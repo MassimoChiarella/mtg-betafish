@@ -116,6 +116,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   text-decoration: none;
   text-transform: none;
 }
+.brand-fish { width: 2rem; height: 2rem; flex: 0 0 auto; background: url("/fish-icon.png") center / contain no-repeat; image-rendering: pixelated; transform: scaleX(-1); }
 .brand-title { display: flex; align-items: baseline; gap: 7px; line-height: 1; }
 .brand strong, .brand small { font-family: var(--font-display); font-size: 19px; font-weight: 700; letter-spacing: -.035em; }
 .brand small { color: var(--accent); }
