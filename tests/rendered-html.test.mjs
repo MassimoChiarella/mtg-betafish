@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import worker from "../dist/server/index.js";
 
 const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 const cssSource = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+const exportedHtml = await readFile(new URL("../dist/client/index.html", import.meta.url), "utf8");
 
 function sourceSection(source, start, end) {
   const startAt = source.indexOf(start);
@@ -13,20 +13,8 @@ function sourceSection(source, start, end) {
   return source.slice(startAt, endAt);
 }
 
-async function render() {
-  return worker.fetch(
-    new Request("https://mtg-betafish.example/", { headers: { accept: "text/html", host: "mtg-betafish.example" } }),
-    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
-    { waitUntil() {}, passThroughOnException() {} },
-  );
-}
-
-test("server-renders the MTG Betafish product shell and social metadata", async () => {
-  const response = await render();
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
-
-  const html = await response.text();
+test("statically exports the MTG Betafish product shell and social metadata", () => {
+  const html = exportedHtml;
   assert.match(html, /<title>MTG Betafish — Commander Playtest Companion<\/title>/i);
   assert.match(html, /The table acts\./);
   assert.match(html, /Assign your combat damage/);
@@ -35,7 +23,7 @@ test("server-renders the MTG Betafish product shell and social metadata", async 
   assert.match(html, /Scenario card:/);
   assert.match(html, /Poison/);
   assert.match(html, /21 or more combat damage by the same commander/);
-  assert.match(html, /https:\/\/mtg-betafish\.example\/og\.png/);
+  assert.match(html, /<meta property="og:image" content="https?:\/\/[^"<>]+\/og\.png"/);
 
   const encounter = html.indexOf('class="encounter-column"');
   const opponents = html.indexOf('class="rail opponents-panel"');
@@ -43,8 +31,8 @@ test("server-renders the MTG Betafish product shell and social metadata", async 
   assert.ok(encounter >= 0 && encounter < opponents && opponents < pressure, "mobile DOM order should be encounter, opponents, pressure");
 });
 
-test("event source avatar matches the opponent rail by identity", async () => {
-  const html = (await (await render()).text()).replace(/<!--.*?-->/g, "");
+test("event source avatar matches the opponent rail by identity", () => {
+  const html = exportedHtml.replace(/<!--.*?-->/g, "");
   const source = html.match(/<p class="source"><span class="avatar (avatar-\d+)">([^<]+)<\/span> ([^<]+) takes an action<\/p>/);
   assert.ok(source, "the event should identify its source with an avatar and name");
   const rail = sourceSection(html, 'class="rail opponents-panel"', 'class="rail pressure-panel"');

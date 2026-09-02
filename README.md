@@ -4,7 +4,7 @@ A browser companion for stress-testing Magic: The Gathering Commander decks whil
 
 ## Run locally
 
-Requires Node.js 22.18 or newer.
+Requires Node.js 24.x (also pinned in `.nvmrc`).
 
 ```bash
 npm ci
@@ -36,14 +36,31 @@ Bracket names and pacing guidance reflect the versioned Wizards Commander Bracke
 ## Checks
 
 ```bash
-npm run build
-npm run lint
-npm test
+npm run check
 ```
+
+This runs lint, generates route types, checks TypeScript, builds the static export, and runs all tests. `npm run build` also checks that exported HTML, scripts, styles, images, and metadata exist, so a successful bundler run cannot silently deploy an empty site.
+
+## Deploy to Vercel
+
+Import this repository into Vercel. The committed `vercel.json` sets the framework to **Other**, installs with `npm ci`, runs `npm run check`, and publishes only `dist/client`. Node.js is pinned to **24.x** in `package.json`.
+
+The application is a static Vinext export: there are no server functions, database bindings, or API keys to configure. Content-hashed assets under `/_next/static/` receive immutable browser caching; HTML and unversioned assets revalidate. The existing Sites manifest also points to the same static output.
+
+Canonical links and social previews use the build-time `SITE_URL` when provided, otherwise Vercel's production domain (`VERCEL_PROJECT_PRODUCTION_URL`), then its deployment URL (`VERCEL_URL`). Vercel system environment variables must be exposed to builds (the default). For a custom domain, optionally set `SITE_URL=https://your-domain.example` and redeploy after changing it. Local builds fall back to `http://localhost:3000`; no incoming request headers affect metadata.
+
+To check exactly the static files that will be deployed:
+
+```bash
+npm run build
+npm start
+```
+
+Open the printed preview URL. Confirm the app reaches **Saved locally**, change a life total, reload and confirm it persists, then open table setup and the scenario library. This preview serves static files only, without a server-rendering fallback. Saved sessions are browser/domain-local; there is no domain-migration step.
 
 ## Configuration and secrets
 
-MTG Betafish currently needs no API keys or local environment variables. Scryfall card data and images use its public API without authentication.
+MTG Betafish needs no API keys. `SITE_URL` is optional public configuration, shown in `.env.example`; use `.env.local` for local overrides. Scryfall card images use its public API without authentication.
 
 If configuration is added later, keep local values in `.env.local` or `.dev.vars`; these files, project-level npm credentials, and common private-key formats are ignored. Commit only placeholder values in `.env.example`, and store production secrets in the hosting platform's secret manager.
 

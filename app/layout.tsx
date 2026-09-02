@@ -1,24 +1,25 @@
 import type { Metadata } from "next";
-import { headers } from "next/headers";
 import "./globals.css";
 
-export async function generateMetadata(): Promise<Metadata> {
-  const requestHeaders = await headers();
-  const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host") ?? "localhost:3000";
-  const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
-  const origin = new URL(`${protocol}://${host}`);
-  const title = "MTG Betafish — Commander Playtest Companion";
-  const description = "Stress-test Commander decks against bracket-aware matchup profiles, interaction, combat pressure, and countdown threats.";
-  const socialImage = new URL("/og.png", origin).toString();
-
-  return {
-    metadataBase: origin,
-    title,
-    description,
-    openGraph: { title, description, images: [{ url: socialImage, width: 1672, height: 941, alt: "MTG Betafish — stress-test your Commander deck" }] },
-    twitter: { card: "summary_large_image", title, description, images: [socialImage] },
-  };
+// These values are resolved at build time, never from untrusted request headers.
+const deploymentHost = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+const origin = new URL(process.env.SITE_URL || (deploymentHost ? `https://${deploymentHost}` : "http://localhost:3000"));
+if (!["http:", "https:"].includes(origin.protocol) || origin.username || origin.password) {
+  throw new Error("SITE_URL must be an HTTP(S) URL without credentials.");
 }
+const title = "MTG Betafish — Commander Playtest Companion";
+const description = "Stress-test Commander decks against bracket-aware matchup profiles, interaction, combat pressure, and countdown threats.";
+const socialImage = new URL("/og.png", origin).toString();
+
+export const metadata: Metadata = {
+  metadataBase: origin,
+  title,
+  description,
+  alternates: { canonical: "/" },
+  icons: { icon: "/fish-icon.png" },
+  openGraph: { type: "website", siteName: "MTG Betafish", url: "/", title, description, images: [{ url: socialImage, width: 1672, height: 941, alt: "MTG Betafish — stress-test your Commander deck" }] },
+  twitter: { card: "summary_large_image", title, description, images: [socialImage] },
+};
 
 export default function RootLayout({
   children,
