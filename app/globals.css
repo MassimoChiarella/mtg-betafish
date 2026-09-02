@@ -293,16 +293,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .source-badge, .danger-badge {
   max-width: 56%;
   padding: 7px 10px;
-  overflow: hidden;
   border-radius: 7px;
   background: #30333d;
   color: #e5e7ed;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: .04em;
-  text-overflow: ellipsis;
+  line-height: 1.5;
   text-transform: uppercase;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .danger-badge { background: #663022; color: #ffd9cf; }
 .spell-art {
@@ -593,12 +593,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .preview-panel { position: fixed; inset: auto; position-area: bottom; position-try-fallbacks: flip-block; margin: 10px; border: 1px solid #353944; border-radius: 12px; background: var(--ink); color: white; box-shadow: 0 18px 48px rgba(25,27,34,.26); }
 .preview-panel::backdrop { background: transparent; }
-.card-preview-panel { width: min(220px, calc(100vw - 24px)); padding: 7px; overflow: hidden; }
-.card-preview-panel:popover-open { display: grid; place-items: center; }
-.card-preview-panel > * { grid-area: 1 / 1; }
-.card-preview-panel img { display: block; width: 100%; max-height: calc(100vh - 38px); aspect-ratio: 488 / 680; border-radius: 8px; object-fit: contain; }
+.card-preview-panel {
+  width: min(220px, calc(100vw - 24px), calc((100vh - 40px) * 488 / 680 + 16px));
+  width: min(220px, calc(100vw - 24px), calc((100dvh - 40px) * 488 / 680 + 16px));
+  height: fit-content;
+  align-self: start;
+  padding: 7px;
+  overflow: hidden;
+}
+.card-preview-panel:popover-open { display: block; }
+.card-preview-panel img { display: block; width: 100%; height: auto; aspect-ratio: 488 / 680; border-radius: 8px; object-fit: contain; }
 .card-preview-panel img.pending { opacity: 0; }
 .card-preview-status { z-index: 1; min-height: 90px; padding: 12px; display: grid; place-items: center; color: #d7d7db; font-size: 12px; text-align: center; }
+.card-preview-panel:has(> img) > .card-preview-status { position: absolute; inset: 7px; }
 .glossary-preview-panel { width: min(260px, calc(100vw - 24px)); max-height: calc(100vh - 24px); padding: 12px 13px; overflow-y: auto; font: 600 12px/1.5 var(--font-body); letter-spacing: normal; text-align: left; text-transform: none; white-space: normal; }
 .glossary-preview-panel:popover-open { display: block; }
 .glossary-definition-list { margin: 0; display: grid; gap: 10px; }
@@ -728,6 +735,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
 
+@media (max-width: 900px), (max-height: 640px), (pointer: coarse) {
+  .card-preview-panel { position-area: none; inset: 0; margin: auto; }
+}
+
 @media (max-width: 900px), (pointer: coarse) {
   .damage-inputs input, .settings-body input, .settings-body select, .attacker-form input, .attacker-form select, .target-select select, .toxic-payment input, .correction-form input { min-height: 44px; font-size: 16px; }
   .life-control { grid-template-columns: 44px 36px 44px; }
@@ -754,6 +765,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .top-action { min-height: 44px; padding-inline: 11px; font-size: 11px; }
   .workspace { display: flex; flex-direction: column; padding: 30px 18px 40px; gap: 32px; }
   .encounter-column, .opponents-panel, .pressure-panel { width: 100%; }
+  .card-topline { align-items: flex-start; flex-direction: column; gap: 8px; padding-block: 13px; }
+  .source-badge, .danger-badge { max-width: 100%; }
   .pressure-panel { display: grid; grid-template-columns: 1fr; }
   .response-actions { grid-template-columns: 1fr 1fr; }
   .response-actions .text-button { grid-column: 1 / -1; }
@@ -803,8 +816,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .workspace { padding-inline: 12px; }
   .encounter-intro h1 { font-size: 30px; }
   .encounter-copy, .response-box { padding-inline: 19px; }
-  .card-topline { align-items: flex-start; flex-direction: column; padding-block: 13px; }
-  .source-badge, .danger-badge { max-width: 100%; }
   .response-actions { grid-template-columns: 1fr; }
   .response-actions .text-button { grid-column: auto; }
   .next-action { align-items: flex-start; flex-direction: column; }
