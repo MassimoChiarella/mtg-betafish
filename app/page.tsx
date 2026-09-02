@@ -1587,7 +1587,10 @@ export default function Home() {
             {game.activeThreat && <span className={`top-threat ${game.activeThreat.remaining <= 1 ? "imminent" : ""}`}>Threat · {game.activeThreat.remaining} {game.activeThreat.remaining === 1 ? "round" : "rounds"}</span>}
           </span>
         </div>
-        <button className="link-button top-action" type="button" onClick={openSettings}>Table setup</button>
+        <div className="top-actions">
+          <button className="link-button top-action" type="button" onClick={openSettings}>Table setup</button>
+          <button className="link-button top-action mobile-restart" type="button" aria-haspopup="dialog" onClick={() => setActiveModal("reset")}>Restart session</button>
+        </div>
       </header>
 
       <section className="workspace" id="main-workspace">
@@ -1799,7 +1802,7 @@ export default function Home() {
         <span>Session seed <b>{game.seed}</b></span>
         <button type="button" onClick={() => setActiveModal("library")}>Scenario library · {CARD_LIBRARY_UPDATED}</button>
         <span className={`save-status save-status-${saveStatus}`} role="status">{hydrated ? saveStatusText[saveStatus] : "Loading saved session…"}</span>
-        <button type="button" onClick={() => setActiveModal("reset")}>Restart session</button>
+        <button className="footer-restart" type="button" aria-haspopup="dialog" onClick={() => setActiveModal("reset")}>Restart session</button>
       </footer>
 
       {activeModal === "settings" && (

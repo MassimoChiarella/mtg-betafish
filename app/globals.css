@@ -132,7 +132,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .top-threat { padding-left: 9px; border-left: 1px solid var(--line); color: var(--muted); font: 650 11px/1.2 var(--font-body); white-space: nowrap; }
 .top-threat.imminent { color: #a43f29; }
 .eyebrow { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+.top-actions { display: flex; justify-self: end; gap: 8px; }
 .top-action { justify-self: end; }
+.mobile-restart { display: none; }
 .link-button {
   min-height: 40px;
   padding: 0 15px;
@@ -763,6 +765,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .turn-status-row { margin-top: 0; justify-content: flex-end; }
   .turn-status-row > b { display: none; }
   .top-action { min-height: 44px; padding-inline: 11px; font-size: 11px; }
+  .mobile-restart { display: block; }
+  .footer-restart { display: none; }
   .workspace { display: flex; flex-direction: column; padding: 30px 18px 40px; gap: 32px; }
   .encounter-column, .opponents-panel, .pressure-panel { width: 100%; }
   .card-topline { align-items: flex-start; flex-direction: column; gap: 8px; padding-block: 13px; }
@@ -785,6 +789,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 
 @media (max-width: 520px) {
+  .topbar { grid-template-columns: minmax(0, 1fr) auto; padding-block: 10px; gap: 8px 12px; }
+  .top-actions { grid-column: 1 / -1; justify-self: stretch; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .top-action { justify-self: stretch; }
+  [tabindex="-1"] { scroll-margin-block: 132px 24px; }
   .modal { width: 100%; max-width: none; max-height: 94vh; max-height: 94dvh; margin: auto 0 0; border-radius: 24px 24px 0 0; }
   .modal-wide { width: 100%; }
   .modal-header, .combat-builder, .settings-body, .library-grid { padding-inline: 17px; }

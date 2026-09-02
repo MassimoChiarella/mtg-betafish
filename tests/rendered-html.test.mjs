@@ -370,6 +370,26 @@ test("mobile turn flow keeps context, existing controls, and touch targets reach
   assert.match(cssSource, /\[tabindex="-1"\] \{ scroll-margin-block: 96px 24px; \}/);
 });
 
+test("mobile restart is available in the header without bypassing confirmation", () => {
+  const header = sourceSection(pageSource, '<header className="topbar">', "</header>");
+  const footer = sourceSection(pageSource, '<footer className="session-footer">', "</footer>");
+  const confirmation = sourceSection(pageSource, '{activeModal === "reset"', '{game.gameOver && !activeModal');
+  assert.match(header, /className="link-button top-action mobile-restart"[^>]*onClick=\{\(\) => setActiveModal\("reset"\)\}>Restart session/);
+  assert.doesNotMatch(header, /onClick=\{resetSession\}/);
+  assert.match(footer, /className="footer-restart"[^>]*onClick=\{\(\) => setActiveModal\("reset"\)\}/);
+  assert.match(confirmation, /onClick=\{\(\) => setActiveModal\(null\)\}>Keep playing/);
+  assert.match(confirmation, /onClick=\{resetSession\}>Restart with a new seed/);
+
+  const mobile = sourceSection(cssSource, "@media (max-width: 820px)", "@media (max-width: 520px)");
+  const phone = sourceSection(cssSource, "@media (max-width: 520px)", "@media (max-width: 460px)");
+  assert.match(cssSource, /\.mobile-restart \{ display: none; \}/);
+  assert.match(mobile, /\.mobile-restart \{ display: block; \}/);
+  assert.match(mobile, /\.footer-restart \{ display: none; \}/);
+  assert.match(mobile, /\.top-action \{[^}]*min-height: 44px/);
+  assert.match(phone, /\.top-actions \{[^}]*grid-column: 1 \/ -1;[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(phone, /\[tabindex="-1"\] \{ scroll-margin-block: 132px 24px; \}/);
+});
+
 test("glossary previews stay separate from one-click game actions", () => {
   const cardPreview = sourceSection(pageSource, "function CardPreview(", "function GlossaryTerm(");
   const glossaryTerm = sourceSection(pageSource, "function GlossaryTerm(", "function GlossaryExplanation(");
