@@ -47,6 +47,19 @@ test("exported metadata has an absolute, consistent public origin", () => {
   }
 });
 
+test("Web Analytics is mounted only for Vercel builds with public endpoint configuration", async () => {
+  const rsc = await readFile(new URL("index.rsc", publicDirectory), "utf8");
+  const enabled = process.env.VERCEL === "1";
+  assert.equal(/:I\[[^\n]*,"Analytics",/.test(rsc), enabled);
+  assert.equal(rsc.includes('"configString":'), enabled);
+  if (enabled && process.env.VERCEL_OBSERVABILITY_CLIENT_CONFIG) {
+    const config = JSON.parse(process.env.VERCEL_OBSERVABILITY_CLIENT_CONFIG).analytics;
+    for (const key of ["scriptSrc", "viewEndpoint", "eventEndpoint"]) {
+      if (config?.[key]) assert.ok(rsc.includes(config[key]), `missing public analytics ${key}`);
+    }
+  }
+});
+
 test("Vercel publishes only the static directory and caches only versioned assets immutably", async () => {
   const config = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8"));
   assert.equal(config.framework, null);

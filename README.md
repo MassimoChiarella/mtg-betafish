@@ -49,6 +49,10 @@ The application is a static Vinext export: there are no server functions, databa
 
 Canonical links and social previews use the build-time `SITE_URL` when provided, otherwise Vercel's production domain (`VERCEL_PROJECT_PRODUCTION_URL`), then its deployment URL (`VERCEL_URL`). Vercel system environment variables must be exposed to builds (the default). For a custom domain, optionally set `SITE_URL=https://your-domain.example` and redeploy after changing it. Local builds fall back to `http://localhost:3000`; no incoming request headers affect metadata.
 
+Vercel Web Analytics records page views on Vercel deployments only; local development and other hosts do not load it. Enable Web Analytics in the Vercel dashboard before deploying. The root layout passes Vercel's public `VERCEL_OBSERVABILITY_CLIENT_CONFIG` to the React integration at build time so its hosted endpoints work with the static Vinext export. No custom gameplay events or saved session data are sent.
+
+Push a branch other than `main` to create an isolated Vercel Preview deployment. After verifying it, merge into `main` to deploy to production. Analytics defaults to production data; select the Preview environment in its dashboard to inspect preview visits.
+
 To check exactly the static files that will be deployed:
 
 ```bash

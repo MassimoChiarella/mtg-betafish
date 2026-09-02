@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Analytics } from "@vercel/analytics/react";
 import "./globals.css";
 
 // These values are resolved at build time, never from untrusted request headers.
@@ -28,7 +29,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        {process.env.VERCEL === "1" && (
+          <Analytics configString={process.env.VERCEL_OBSERVABILITY_CLIENT_CONFIG} />
+        )}
+      </body>
     </html>
   );
 }
