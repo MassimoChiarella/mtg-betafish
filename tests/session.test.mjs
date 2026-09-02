@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { decodeGameState, GAME_STATE_VERSION } from "../app/session.ts";
-import { EVENT_TEMPLATES, SIGNATURE_USE_TEMPLATE_ID } from "../app/simulator.ts";
+import { developmentEvent, EVENT_TEMPLATES } from "../app/simulator.ts";
+
+const SIGNATURE_USE_TEMPLATE_ID = "signature-card-encounter";
 
 function eventFromTemplate(templateId, sourceId = "one", sourceName = "One") {
   const template = EVENT_TEMPLATES.find(({ id }) => id === templateId);
@@ -201,9 +203,8 @@ test("a valid v6 state round-trips as a fresh serializable value", () => {
   assert.deepEqual(JSON.parse(JSON.stringify(decoded)), decoded);
 });
 
-test("an actionable signature-card encounter preserves its revealed source and card", () => {
-  const raw = currentState();
-  raw.currentEvent = {
+function makeSignature(state) {
+  state.currentEvent = {
     id: "signature-card-encounter",
     templateId: SIGNATURE_USE_TEMPLATE_ID,
     kind: "signature",
@@ -216,48 +217,72 @@ test("an actionable signature-card encounter preserves its revealed source and c
     responseOptions: ["custom"],
     emptyOutcome: "There was no legal opportunity to use the revealed card in the current playtest state.",
   };
-  raw.responseStage = "prompt";
-  raw.counterExchange = 0;
+  state.responseStage = "prompt";
+  state.counterExchange = 0;
+}
 
-  const decoded = decodeGameState(raw);
-  assert.ok(decoded);
-  assert.deepEqual(decoded.currentEvent, raw.currentEvent);
+test("retired signature encounters resume safely without changing tracked game state", () => {
+  for (const stage of ["prompt", "choose", "resolved"]) {
+    const raw = currentState();
+    makeSignature(raw);
+    raw.responseStage = stage;
+    raw.resolution = stage === "resolved" ? "Use the revealed card." : "";
+
+    const decoded = decodeGameState(raw);
+    assert.deepEqual(decoded, {
+      ...raw,
+      currentEvent: developmentEvent(raw.currentEvent.id, raw.opponents[0]),
+      responseStage: stage === "resolved" ? "resolved" : "prompt",
+      resolution: stage === "resolved" ? "This card-reveal action has been removed. Continue the simulation." : "",
+    });
+    assert.deepEqual(decodeGameState(decoded), decoded);
+  }
 });
 
-test("a recorded signature reveal preserves the exact pending follow-up through reload", () => {
+test("saved card reveals become neutral development with no promised follow-up", () => {
+  for (const stage of ["prompt", "resolved"]) {
+    const raw = currentState();
+    makeDevelopment(raw);
+    raw.responseStage = stage;
+    raw.resolution = "Their next generated action will use this exact card.";
+
+    const decoded = decodeGameState(raw);
+    assert.deepEqual(decoded, {
+      ...raw,
+      currentEvent: developmentEvent(raw.currentEvent.id, raw.opponents[0]),
+      resolution: stage === "resolved" ? "This card-reveal action has been removed. Continue the simulation." : "",
+    });
+    assert.deepEqual(decodeGameState(decoded), decoded);
+  }
+});
+
+test("retired encounters migrate even when the whole table has been eliminated", () => {
   const raw = currentState();
-  makeDevelopment(raw);
+  makeSignature(raw);
   raw.responseStage = "resolved";
-
+  raw.opponents.forEach((opponent) => { opponent.eliminated = true; });
+  raw.activeThreat = null;
+  raw.gameOver = "You eliminated every simulated opponent.";
   const decoded = decodeGameState(raw);
   assert.ok(decoded);
+  assert.equal(decoded.gameOver, raw.gameOver);
   assert.equal(decoded.responseStage, "resolved");
-  assert.deepEqual(decoded.currentEvent, raw.currentEvent);
+  assert.deepEqual(decoded.currentEvent, developmentEvent(raw.currentEvent.id, raw.opponents[0]));
+  assert.deepEqual(decoded.opponents, raw.opponents);
 });
 
-test("native signature encounters require their registered template and response metadata", async (t) => {
+test("retired signature encounters still require valid saved metadata and stages", async (t) => {
   const signatureState = () => {
     const state = currentState();
-    state.currentEvent = {
-      id: "signature-card-encounter",
-      templateId: SIGNATURE_USE_TEMPLATE_ID,
-      kind: "signature",
-      sourceId: "one",
-      sourceName: "One",
-      title: "One uses the revealed Counterspell.",
-      prompt: "Resolve the exact previously revealed card.",
-      card: "Counterspell",
-      tags: ["Signature follow-through", "Previously revealed"],
-      responseOptions: ["custom"],
-      emptyOutcome: "There was no legal opportunity to use the revealed card in the current playtest state.",
-    };
-    state.responseStage = "prompt";
+    makeSignature(state);
     return state;
   };
   const cases = [
     ["unknown template", (state) => { state.currentEvent.templateId = "unknown-signature"; }],
     ["wrong response", (state) => { state.currentEvent.responseOptions = ["counter"]; }],
     ["wrong empty outcome", (state) => { state.currentEvent.emptyOutcome = "Tampered"; }],
+    ["combat stage", (state) => { state.responseStage = "combat"; }],
+    ["counterback stage", (state) => { state.responseStage = "counterback"; state.counterExchange = 1; }],
   ];
   for (const [name, mutate] of cases) {
     await t.test(name, () => {

@@ -17,8 +17,6 @@ import {
   opponentCommanderKey,
   resolveCombatDamage,
   rollDefense,
-  SIGNATURE_REVEAL_TEMPLATE_ID,
-  SIGNATURE_USE_TEMPLATE_ID,
   userCommanderKey,
 } from "../app/simulator.ts";
 
@@ -176,11 +174,12 @@ test("RC-02 B3GC-EARLY-4530 and 100,000 B3 round-20 sequences stay within three 
   }
 });
 
-test("every bracket-specific core card can surface as matchup intel", () => {
-  for (const [profileId, profile] of Object.entries(DECK_PROFILES)) {
+test("development preserves bracket pacing without revealing cards or scheduling their use", () => {
+  for (const profileId of Object.keys(DECK_PROFILES)) {
     for (const bracket of [1, 2, 3, 4, 5]) {
-      const unseen = new Set(profile.coreCards[bracket]);
-      for (let counter = 0; counter < 5_000 && unseen.size; counter += 1) {
+      assert.equal(eventKindWeights({ turn: 20, profile: profileId, bracket, activeThreat: false }).development, [70, 55, 40, 25, 10][bracket - 1]);
+      let developmentCount = 0;
+      for (let counter = 0; counter < 200; counter += 1) {
         const event = generateEvent({
           turn: 20,
           counter,
@@ -190,55 +189,21 @@ test("every bracket-specific core card can surface as matchup intel", () => {
           activeThreat: false,
           combatResolvedTurn: 20,
         });
+        assert.notEqual(event.kind, "signature");
         if (event.kind === "development") {
-          unseen.delete(event.card);
-          assert.match(event.prompt, /next generated action will use this exact card/i);
+          developmentCount += 1;
+          assert.equal(event.card, "Table development");
+          assert.deepEqual(event.responseOptions, []);
+          assert.match(event.prompt, /No spell or attacker is aimed at you by this action/);
+          assert.doesNotMatch(JSON.stringify(event), /reveal|signature|Deck intel/i);
         }
       }
-      assert.deepEqual([...unseen], [], `${profileId} B${bracket} has unreachable core cards`);
+      assert.ok(developmentCount > 0, `${profileId} B${bracket} still has quiet development actions`);
     }
   }
 });
 
-test("every revealed core card forces the exact next signature-card encounter", () => {
-  for (const [profileId, profile] of Object.entries(DECK_PROFILES)) {
-    for (const bracket of [1, 2, 3, 4, 5]) {
-      const source = {
-        id: `${profileId}-${bracket}`,
-        name: "Revealing opponent",
-        profile: profileId,
-        bracket,
-        life: 40,
-        poisonCounters: 0,
-        commanderDamage: {},
-        lossProtected: false,
-        eliminated: false,
-      };
-      for (const card of profile.coreCards[bracket]) {
-        const input = {
-          turn: 8,
-          counter: 12,
-          seed: "SIGNATURE-FOLLOW-UP",
-          opponents: [source],
-          recentTemplateIds: [SIGNATURE_REVEAL_TEMPLATE_ID],
-          activeThreat: false,
-          signatureFollowUp: { sourceId: source.id, card, profile: source.profile, bracket: source.bracket },
-        };
-        const event = generateEvent(input);
-
-        assert.deepEqual(event, generateEvent(input));
-        assert.equal(event.templateId, SIGNATURE_USE_TEMPLATE_ID);
-        assert.equal(event.kind, "signature");
-        assert.equal(event.sourceId, source.id);
-        assert.equal(event.card, card);
-        assert.deepEqual(event.responseOptions, ["custom"]);
-        assert.match(event.prompt, /exact signature card revealed in the previous encounter/i);
-      }
-    }
-  }
-});
-
-test("stale or invalid signature follow-ups fall back to normal seeded generation", () => {
+test("retired signature follow-up inputs cannot override normal seeded generation", () => {
   const living = {
     id: "living",
     name: "Living",
@@ -253,17 +218,7 @@ test("stale or invalid signature follow-ups fall back to normal seeded generatio
   const base = { turn: 8, counter: 22, seed: "STALE-SIGNATURE", opponents: [living], recentTemplateIds: [], activeThreat: false };
   const normal = generateEvent(base);
 
-  assert.deepEqual(generateEvent({ ...base, signatureFollowUp: { sourceId: "missing", card: "Counterspell", profile: "control", bracket: 3 } }), normal);
-  assert.deepEqual(generateEvent({ ...base, signatureFollowUp: { sourceId: living.id, card: "Black Lotus", profile: "control", bracket: 3 } }), normal);
-  assert.deepEqual(generateEvent({ ...base, signatureFollowUp: { sourceId: living.id, card: DECK_PROFILES.control.coreCards[4][0], profile: "control", bracket: 3 } }), normal);
-  assert.deepEqual(generateEvent({ ...base, opponents: [{ ...living, bracket: 4 }], signatureFollowUp: { sourceId: living.id, card: "The One Ring", profile: "midrange", bracket: 4 } }), generateEvent({ ...base, opponents: [{ ...living, bracket: 4 }] }));
-
-  const eliminated = { ...living, id: "gone", eliminated: true };
-  const withEliminated = { ...base, opponents: [eliminated, living] };
-  assert.deepEqual(
-    generateEvent({ ...withEliminated, signatureFollowUp: { sourceId: eliminated.id, card: DECK_PROFILES.control.coreCards[3][0], profile: "control", bracket: 3 } }),
-    generateEvent(withEliminated),
-  );
+  assert.deepEqual(generateEvent({ ...base, signatureFollowUp: { sourceId: living.id, card: DECK_PROFILES.control.coreCards[3][0], profile: "control", bracket: 3 } }), normal);
 });
 
 test("Commander brackets increase pace and interaction without changing replayability", () => {

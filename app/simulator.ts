@@ -4,7 +4,7 @@
  */
 
 export type ProfileId = "midrange" | "control" | "swarm" | "voltron" | "combo" | "graveyard";
-export type EventKind = "targeted" | "wipe" | "counter" | "disruption" | "attack" | "threat" | "development" | "signature";
+export type EventKind = "targeted" | "wipe" | "counter" | "disruption" | "attack" | "threat" | "development";
 export type Keyword = "Flying" | "Reach" | "Trample" | "Menace" | "Vigilance" | "Deathtouch" | "First strike" | "Double strike" | "Haste" | "Lifelink" | "Infect";
 export type CommanderSlot = "primary" | "partner";
 export type CommanderBracket = 1 | 2 | 3 | 4 | 5;
@@ -65,11 +65,6 @@ export type SimEvent = {
   threat?: Threat;
 };
 
-export type SignatureFollowUp = Pick<SimEvent, "sourceId" | "card"> & Pick<Opponent, "profile" | "bracket">;
-
-export const SIGNATURE_REVEAL_TEMPLATE_ID = "table-development";
-export const SIGNATURE_USE_TEMPLATE_ID = "signature-card-encounter";
-
 export type DefenseResult = {
   type: "none" | "block" | "removal" | "fog";
   title: string;
@@ -78,7 +73,7 @@ export type DefenseResult = {
 
 type EventTemplate = {
   id: string;
-  kind: Exclude<EventKind, "attack" | "development" | "signature">;
+  kind: Exclude<EventKind, "attack" | "development">;
   minTurn: number;
   title: string;
   prompt: string;
@@ -156,7 +151,7 @@ export const DECK_PROFILES: Record<ProfileId, {
   combat: number;
   counterBack: number;
   /** Relative event-selection weights. */
-  events: Record<Exclude<EventKind, "attack" | "development" | "signature">, number>;
+  events: Record<Exclude<EventKind, "attack" | "development">, number>;
   /** Base defense weights ordered as none, block, removal, and fog. */
   defense: [number, number, number, number];
 }> = {
@@ -336,11 +331,7 @@ function isTemplateEligible(template: EventTemplate, profile: ProfileId, bracket
 /** Supplies deterministic response metadata when migrating pre-v5 events. */
 export function responseMetadataForEvent(templateId: string, kind: EventKind): Pick<SimEvent, "responseOptions" | "emptyOutcome"> | null {
   if (templateId === "scaled-attack") return kind === "attack" ? { responseOptions: [] } : null;
-  if (templateId === SIGNATURE_REVEAL_TEMPLATE_ID) return kind === "development" ? { responseOptions: [] } : null;
-  if (templateId === SIGNATURE_USE_TEMPLATE_ID) return kind === "signature" ? {
-    responseOptions: ["custom"],
-    emptyOutcome: "There was no legal opportunity to use the revealed card in the current playtest state.",
-  } : null;
+  if (templateId === "table-development") return kind === "development" ? { responseOptions: [] } : null;
   if (kind === "attack" || kind === "development") return { responseOptions: [] };
   const template = EVENT_TEMPLATES.find((candidate) => candidate.id === templateId);
   if (template) return { responseOptions: [...template.responseOptions], emptyOutcome: template.emptyOutcome };
@@ -444,7 +435,6 @@ export function eventKindWeights(input: { turn: number; profile: ProfileId; brac
     attack: input.combatResolvedTurn === input.turn ? 0 : attackBand(effectiveTurn).chance * profile.combat * (bracketRules.pace ** 3) * 35,
     threat: !input.activeThreat && input.turn >= bracketRules.earliestThreatTurn && eligibleKinds.has("threat") ? profile.events.threat * bracketRules.pace : 0,
     development: ({ 1: 70, 2: 55, 3: 40, 4: 25, 5: 10 } as Record<CommanderBracket, number>)[bracket],
-    signature: 0,
   };
 }
 
@@ -508,6 +498,22 @@ function generateCombatDeclaration(random: () => number, turn: number, source: O
   return attackers;
 }
 
+export function developmentEvent(id: string, source: Pick<Opponent, "id" | "name" | "bracket">): SimEvent {
+  const bracket = normalizeCommanderBracket(source.bracket);
+  return {
+    id,
+    templateId: "table-development",
+    kind: "development",
+    sourceId: source.id,
+    sourceName: source.name,
+    title: `${source.name} develops their game plan.`,
+    prompt: "No spell or attacker is aimed at you by this action. Use the breathing room to advance your own plan.",
+    card: "Table development",
+    tags: ["Development", `B${bracket} ${COMMANDER_BRACKETS[bracket].label}`],
+    responseOptions: [],
+  };
+}
+
 /**
  * Generates the same event for identical inputs and avoids recent templates
  * when an eligible alternative exists.
@@ -521,43 +527,16 @@ export function generateEvent(input: {
   recentTemplateIds: string[];
   activeThreat: boolean;
   combatResolvedTurn?: number | null;
-  signatureFollowUp?: SignatureFollowUp | null;
 }): SimEvent {
   const { turn, counter, seed, recentTemplateIds, activeThreat, combatResolvedTurn } = input;
   const livingOpponents = input.opponents.filter((opponent) => !opponent.eliminated);
   if (!livingOpponents.length) throw new Error("Cannot generate an event without a living opponent.");
   const random = rngFor(`${seed}:${turn}:${counter}`);
   const eventId = `event-${turn}-${counter}`;
-  const signatureFollowUp = input.signatureFollowUp;
-  const signatureSource = signatureFollowUp
-    ? livingOpponents.find((opponent) => opponent.id === signatureFollowUp.sourceId)
-    : undefined;
-  if (signatureFollowUp
-    && signatureSource
-    && signatureSource.profile === signatureFollowUp.profile
-    && normalizeCommanderBracket(signatureSource.bracket) === normalizeCommanderBracket(signatureFollowUp.bracket)
-    && DECK_PROFILES[signatureSource.profile].coreCards[normalizeCommanderBracket(signatureSource.bracket)].includes(signatureFollowUp.card)) {
-    const bracket = normalizeCommanderBracket(signatureSource.bracket);
-    const card = signatureFollowUp.card;
-    return {
-      id: eventId,
-      templateId: SIGNATURE_USE_TEMPLATE_ID,
-      kind: "signature",
-      sourceId: signatureSource.id,
-      sourceName: signatureSource.name,
-      title: `${signatureSource.name} uses the revealed ${card}.`,
-      prompt: `This is the exact signature card revealed in the previous encounter. Use ${card} at its next legal, strategically relevant opportunity and resolve only its printed rules text in your playtester.`,
-      card,
-      tags: ["Signature follow-through", "Previously revealed", `B${bracket} ${COMMANDER_BRACKETS[bracket].label}`],
-      responseOptions: ["custom"],
-      emptyOutcome: "There was no legal opportunity to use the revealed card in the current playtest state.",
-    };
-  }
   const source = livingOpponents[intBetween(random, 0, livingOpponents.length - 1)];
   const profile = DECK_PROFILES[source.profile];
   const bracket = normalizeCommanderBracket(source.bracket);
   const bracketRules = COMMANDER_BRACKETS[bracket];
-  const coreCards = profile.coreCards[bracket];
   const effectiveTurn = Math.max(1, turn + bracketRules.turnOffset);
 
   const isEligible = (template: EventTemplate) => isTemplateEligible(template, source.profile, bracket, effectiveTurn);
@@ -581,21 +560,7 @@ export function generateEvent(input: {
     };
   }
 
-  if (kind === "development") {
-    const coreCard = coreCards[intBetween(random, 0, coreCards.length - 1)];
-    return {
-      id: eventId,
-      templateId: SIGNATURE_REVEAL_TEMPLATE_ID,
-      kind,
-      sourceId: source.id,
-      sourceName: source.name,
-      title: `${source.name} reveals a signature card.`,
-      prompt: "This matchup-defining card is not being used yet. If this opponent remains with the same profile and bracket, their next generated action will use this exact card.",
-      card: coreCard,
-      tags: ["Deck intel", "Core card", `B${bracket} ${bracketRules.label}`],
-      responseOptions: [],
-    };
-  }
+  if (kind === "development") return developmentEvent(eventId, source);
 
   let candidates = EVENT_TEMPLATES.filter((template) => template.kind === kind && isEligible(template) && !recentTemplateIds.includes(template.id));
   if (!candidates.length) candidates = EVENT_TEMPLATES.filter((template) => template.kind === kind && isEligible(template));

@@ -21,6 +21,7 @@ test("statically exports the MTG Betafish product shell and social metadata", ()
   assert.match(html, /Scenario library/);
   assert.match(html, /Response window open/);
   assert.match(html, /Scenario card:/);
+  assert.doesNotMatch(html, /Signature card reveal|Signature card encounter|Signature card revealed:/);
   assert.match(html, /Poison/);
   assert.match(html, /21 or more combat damage by the same commander/);
   assert.match(html, /<meta property="og:image" content="https?:\/\/[^"<>]+\/og\.png"/);
@@ -76,7 +77,7 @@ test("game-over recovery preserves the expired round event, undo, correction, an
   const continuation = sourceSection(pageSource, "function continueAfterGameOver()", "function adjustLife(");
   assert.match(continuation, /eventCounter = addSafeInteger\(previous\.eventCounter, 1\)/);
   assert.match(continuation, /currentEvent: generateEvent\(\{[\s\S]*?turn: previous\.turn,/);
-  assert.match(continuation, /signatureFollowUp: signatureFollowUpFor\(previous\)/);
+  assert.doesNotMatch(continuation, /signatureFollowUp/);
   assert.match(continuation, /responseStage: "prompt"/);
 
   const terminal = sourceSection(pageSource, "{game.gameOver && !activeModal && (", "</main>");
@@ -106,7 +107,7 @@ test("resolved table settings allow follow-ups while preserving the combat lock"
   assert.match(settings, /const isFollowUp = previous\.responseStage === "resolved"/);
   assert.match(settings, /const generatedEvent = generateEvent\(\{/);
   assert.match(settings, /combatResolvedTurn: previous\.combatResolvedTurn/);
-  assert.match(settings, /signatureFollowUp: signatureFollowUpFor\(previous\)/);
+  assert.doesNotMatch(settings, /signatureFollowUp/);
   assert.match(settings, /tags: \["Follow-up action", \.\.\.generatedEvent\.tags\]/);
   assert.doesNotMatch(settings, /title: `Follow-up action:/);
   assert.match(incoming, /combatResolvedTurn: previous\.turn/);
@@ -125,30 +126,26 @@ test("table settings expose the selected profile and bracket core", () => {
   assert.doesNotMatch(settings, /guaranteedCards/);
 });
 
-test("signature-card reveals expose the exact card through the shared preview", () => {
+test("quiet development has no card display while actual event previews remain available", () => {
   const presentation = sourceSection(pageSource, "const EVENT_PRESENTATION", "const GLOSSARY_MATCHES");
   const lookup = sourceSection(pageSource, "const eventCardLookup", "const canUndo");
   const encounter = sourceSection(pageSource, '<article className={`encounter-card', '<div className="tag-row">');
 
-  assert.match(presentation, /development: \{ label: "Signature card reveal"/);
-  assert.match(presentation, /signature: \{ label: "Signature card encounter"/);
-  assert.doesNotMatch(lookup, /kind === "development"/);
-  assert.match(encounter, /game\.currentEvent\.kind === "development" \|\| game\.currentEvent\.kind === "signature"[^\n]+<CardPreview name=\{game\.currentEvent\.card\} \/>/);
+  assert.match(presentation, /development: \{ label: "Table development"/);
+  assert.match(lookup, /kind === "development"/);
+  assert.match(encounter, /game\.currentEvent\.kind !== "development"[^\n]+<CardPreview name=\{game\.currentEvent\.card\} lookupName=\{eventCardLookup\} \/>/);
+  assert.doesNotMatch(pageSource, /Signature card|signatureFollowUp|SIGNATURE_REVEAL_TEMPLATE_ID/);
 });
 
-test("recorded signature-card reveals feed every next-event generation path exactly once", () => {
-  const helper = sourceSection(pageSource, "function signatureFollowUpFor", "const EVENT_PRESENTATION");
-  assert.match(helper, /event\.kind === "development"/);
+test("every next-event path uses ordinary generation without a forced card encounter", () => {
   const advance = sourceSection(pageSource, "function advanceTurn()", "function continueAfterGameOver()");
   const continuation = sourceSection(pageSource, "function continueAfterGameOver()", "function adjustLife(");
   const settings = sourceSection(pageSource, "function saveSettings()", "function openCombat()");
 
-  assert.match(helper, /event\.templateId === SIGNATURE_REVEAL_TEMPLATE_ID/);
-  assert.match(helper, /state\.responseStage === "resolved"/);
-  assert.match(helper, /profile: source\.profile, bracket: source\.bracket/);
-  assert.doesNotMatch(helper, /SIGNATURE_USE_TEMPLATE_ID/);
   for (const source of [advance, continuation, settings]) {
-    assert.match(source, /signatureFollowUp: signatureFollowUpFor\(previous\)/);
+    assert.match(source, /generateEvent\(\{/);
+    assert.match(source, /combatResolvedTurn: previous\.combatResolvedTurn/);
+    assert.doesNotMatch(source, /signatureFollowUp/);
   }
 });
 

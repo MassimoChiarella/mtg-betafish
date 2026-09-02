@@ -3,7 +3,7 @@ import {
   DECK_PROFILES,
   EVENT_TEMPLATES,
   KEYWORD_DEFINITIONS,
-  SIGNATURE_USE_TEMPLATE_ID,
+  developmentEvent,
   evaluateTrackedLoss,
   opponentCommanderKey,
   responseMetadataForEvent,
@@ -55,6 +55,14 @@ export type GameState = {
 };
 
 type UnknownRecord = Record<string, unknown>;
+type StoredEvent = Omit<SimEvent, "kind"> & { kind: EventKind | "signature" };
+
+// Retired reveal follow-ups are accepted only for saved-session migration.
+const SIGNATURE_USE_TEMPLATE_ID = "signature-card-encounter";
+const LEGACY_SIGNATURE_METADATA: Pick<SimEvent, "responseOptions" | "emptyOutcome"> = {
+  responseOptions: ["custom"],
+  emptyOutcome: "There was no legal opportunity to use the revealed card in the current playtest state.",
+};
 
 const PROFILES = new Set(Object.keys(DECK_PROFILES));
 const BRACKETS = new Set<unknown>(Object.keys(COMMANDER_BRACKETS).map(Number));
@@ -211,7 +219,7 @@ function readAttacker(value: unknown, sourceId: string, sourceName: string, vers
   return attacker;
 }
 
-function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: number): SimEvent | undefined {
+function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: number): StoredEvent | undefined {
   if (!isRecord(value)
     || !isNonemptyString(value.id)
     || !isNonemptyString(value.templateId)
@@ -258,7 +266,9 @@ function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: nu
   if (version >= 5 && !responseOptions) return undefined;
 
   const template = EVENT_TEMPLATES.find((candidate) => candidate.id === value.templateId);
-  const dynamicMetadata = template ? null : responseMetadataForEvent(value.templateId, value.kind as EventKind);
+  const dynamicMetadata = template ? null
+    : value.kind === "signature" && value.templateId === SIGNATURE_USE_TEMPLATE_ID ? LEGACY_SIGNATURE_METADATA
+      : responseMetadataForEvent(value.templateId, value.kind as EventKind);
   if ((value.templateId === "scaled-attack" && value.kind !== "attack")
     || (value.templateId === "table-development" && value.kind !== "development")
     || (value.templateId === SIGNATURE_USE_TEMPLATE_ID && value.kind !== "signature")) return undefined;
@@ -301,10 +311,10 @@ function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: nu
     };
   }
 
-  const event: SimEvent = {
+  const event: StoredEvent = {
     id: value.id,
     templateId: value.templateId,
-    kind: value.kind as EventKind,
+    kind: value.kind as StoredEvent["kind"],
     sourceId: value.sourceId,
     sourceName: value.sourceName,
     title: template ? template.title : value.title,
@@ -336,7 +346,7 @@ function readHistory(value: unknown): HistoryEntry[] | undefined {
   return value.map(({ id, turn, title, detail, tone }) => ({ id, turn, title, detail, tone }));
 }
 
-function hasCompatibleStage(event: SimEvent, stage: ResponseStage): boolean {
+function hasCompatibleStage(event: StoredEvent, stage: ResponseStage): boolean {
   if (event.kind === "attack") return stage === "prompt" || stage === "combat" || stage === "resolved";
   if (event.kind === "development") return stage === "prompt" || stage === "resolved";
   return stage !== "combat";
@@ -433,7 +443,7 @@ export function decodeGameState(raw: unknown): GameState | null {
       || (currentEvent.templateId === "minus-wipe" && (responseStage === "choose" || responseStage === "counterback") && !toxicDelugePayment)) return null;
     const threatOwner = activeThreat ? opponents.find((opponent) => opponent.id === activeThreat.ownerId) : undefined;
     const currentThreat = currentEvent.threat;
-    if (currentEvent.sourceName !== eventSource?.name
+    if (!eventSource || currentEvent.sourceName !== eventSource.name
       || !hasCompatibleStage(currentEvent, responseStage)
       || (currentThreat && currentThreat.ownerId !== currentEvent.sourceId)
       || (activeThreat && (!threatOwner || threatOwner.eliminated))
@@ -484,6 +494,15 @@ export function decodeGameState(raw: unknown): GameState | null {
           : "You reached 21 commander damage from one commander.";
     }
 
+    const retiredCardAction = currentEvent.kind === "signature"
+      || (currentEvent.kind === "development" && currentEvent.card !== "Table development");
+    const normalizedEvent = retiredCardAction ? developmentEvent(currentEvent.id, eventSource) : currentEvent as SimEvent;
+    if (retiredCardAction) {
+      responseStage = responseStage === "resolved" ? "resolved" : "prompt";
+      resolution = responseStage === "resolved" ? "This card-reveal action has been removed. Continue the simulation." : "";
+      counterExchange = 0;
+    }
+
     return {
       version: GAME_STATE_VERSION,
       turn: raw.turn,
@@ -495,7 +514,7 @@ export function decodeGameState(raw: unknown): GameState | null {
       userLossProtected,
       userPoisonCounters,
       userCommanderDamage,
-      currentEvent,
+      currentEvent: normalizedEvent,
       responseStage,
       resolution,
       toxicDelugePayment,
