@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    # Proposals only: review tests and a Preview deployment before merging.
+    # Group compatible minor/patch updates; review major upgrades individually.
+    groups:
+      react-runtime:
+        patterns:
+          - react
+          - react-dom
+          - react-server-dom-webpack
+          - "@types/react"
+        update-types:
+          - minor
+          - patch
+      vite-toolchain:
+        patterns:
+          - vinext
+          - vite
+          - "@vitejs/plugin-*"
+          - "@openai/sites-vite-plugin"
+        update-types:
+          - minor
+          - patch

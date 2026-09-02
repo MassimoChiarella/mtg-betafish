@@ -5,13 +5,15 @@ import test from "node:test";
 const publicDirectory = new URL("../dist/client/", import.meta.url);
 const html = await readFile(new URL("index.html", publicDirectory), "utf8");
 
-test("static deployment includes the HTML, hydration scripts, styles, and images", async () => {
+test("static deployment includes HTML, hydration scripts, module preloads, styles, and images", async () => {
   assert.match(html, /<html\b/);
   const scripts = [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/g)].map((match) => match[1]);
   const styles = [...html.matchAll(/<link\b[^>]*\brel="stylesheet"[^>]*\bhref="([^"]+)"/g)].map((match) => match[1]);
+  const preloads = [...html.matchAll(/<link\b(?=[^>]*\brel="modulepreload")[^>]*\bhref="([^"]+)"/g)].map((match) => match[1]);
   assert.ok(scripts.length > 0, "export must include hydration scripts");
   assert.ok(styles.length > 0, "export must include CSS");
-  for (const asset of [...scripts, ...styles, "/og.png", "/fish-icon.png"]) {
+  assert.ok(preloads.length > 0, "export must include preloaded client modules");
+  for (const asset of new Set([...scripts, ...styles, ...preloads, "/og.png", "/fish-icon.png"])) {
     const url = new URL(asset, "https://static.example");
     assert.equal(url.origin, "https://static.example", "application assets must be local");
     const file = new URL(`.${url.pathname}`, publicDirectory);
@@ -58,6 +60,26 @@ test("Web Analytics is mounted only for Vercel builds with public endpoint confi
       if (config?.[key]) assert.ok(rsc.includes(config[key]), `missing public analytics ${key}`);
     }
   }
+});
+
+test("Speed Insights is mounted only for Vercel builds with public endpoint configuration", async () => {
+  const rsc = await readFile(new URL("index.rsc", publicDirectory), "utf8");
+  assert.equal(/:I\[[^\n]*,"SpeedInsights",/.test(rsc), process.env.VERCEL === "1");
+  if (process.env.VERCEL === "1" && process.env.VERCEL_OBSERVABILITY_CLIENT_CONFIG) {
+    const config = JSON.parse(process.env.VERCEL_OBSERVABILITY_CLIENT_CONFIG).speedInsights;
+    for (const key of ["scriptSrc", "endpoint"]) {
+      if (config?.[key]) assert.ok(rsc.includes(config[key]), `missing public Speed Insights ${key}`);
+    }
+  }
+});
+
+test("Vercel applies conservative security headers without blocking scripts or images", async () => {
+  const config = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8"));
+  const headers = Object.fromEntries(config.headers.find((rule) => rule.source === "/(.*)").headers.map(({ key, value }) => [key, value]));
+  assert.equal(headers["X-Content-Type-Options"], "nosniff");
+  assert.equal(headers["Referrer-Policy"], "strict-origin-when-cross-origin");
+  assert.equal(headers["X-Frame-Options"], "SAMEORIGIN");
+  assert.equal(headers["Content-Security-Policy"], "frame-ancestors 'self'");
 });
 
 test("Vercel publishes only the static directory and caches only versioned assets immutably", async () => {

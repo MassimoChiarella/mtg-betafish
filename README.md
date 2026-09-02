@@ -39,7 +39,9 @@ Bracket names and pacing guidance reflect the versioned Wizards Commander Bracke
 npm run check
 ```
 
-This runs lint, generates route types, checks TypeScript, builds the static export, and runs all tests. `npm run build` also checks that exported HTML, scripts, styles, images, and metadata exist, so a successful bundler run cannot silently deploy an empty site.
+This runs lint, generates route types, checks TypeScript, builds the static export, and runs all Node tests. `npm run build` also checks exported HTML, direct scripts, module-preloaded hydration chunks, styles, images, metadata, monitoring configuration, and security headers, so a successful bundler run cannot silently deploy an empty site.
+
+For an interactive smoke check, `tests/browser-smoke.mjs` exports `runBrowserSmoke(tab, url)` for an existing Codex Browser runtime tab. After connecting through the Browser skill, import this helper from the checkout and call it with a disposable Vercel Preview URL (or an ordinary local static preview). When serving a Vercel-built export locally, pass `{ vercelBuild: true }` as the third argument. It verifies hydration, a life change persisting after reload, table setup, the scenario library, monitoring-script counts, and console errors. It restores its life increment and never reads or clears browser storage. Do not use an active player's session. This is an operator-run browser check, separate from `npm run check`; it needs no additional browser-driver dependency.
 
 ## Deploy to Vercel
 
@@ -47,9 +49,13 @@ Import this repository into Vercel. The committed `vercel.json` sets the framewo
 
 The application is a static Vinext export: there are no server functions, database bindings, or API keys to configure. Content-hashed assets under `/_next/static/` receive immutable browser caching; HTML and unversioned assets revalidate. The existing Sites manifest also points to the same static output.
 
+Vercel responses disable MIME sniffing, set an explicit referrer policy, and allow framing only by the same origin. The CSP restricts only `frame-ancestors`, preserving Vinext's inline hydration, monitoring scripts, and external card images. Cross-origin embedding would require deliberately updating that policy and `X-Frame-Options` together.
+
 Canonical links and social previews use the build-time `SITE_URL` when provided, otherwise Vercel's production domain (`VERCEL_PROJECT_PRODUCTION_URL`), then its deployment URL (`VERCEL_URL`). Vercel system environment variables must be exposed to builds (the default). For a custom domain, optionally set `SITE_URL=https://your-domain.example` and redeploy after changing it. Local builds fall back to `http://localhost:3000`; no incoming request headers affect metadata.
 
-Vercel Web Analytics records page views on Vercel deployments only; local development and other hosts do not load it. Enable Web Analytics in the Vercel dashboard before deploying. The root layout passes Vercel's public `VERCEL_OBSERVABILITY_CLIENT_CONFIG` to the React integration at build time so its hosted endpoints work with the static Vinext export. No custom gameplay events or saved session data are sent.
+Vercel Web Analytics records page views and basic Speed Insights records performance metrics on Vercel builds only; ordinary local and other-host builds do not load them. Enable Web Analytics in the Vercel dashboard before deploying. The root layout passes Vercel's public `VERCEL_OBSERVABILITY_CLIENT_CONFIG` to both React integrations at build time so their hosted endpoints work with the static Vinext export. No custom gameplay events or saved session data are sent. Performance telemetry includes page URLs and browser/device information; keep sensitive information out of URLs.
+
+Speed Insights uses the free tier, with no Plus upgrade or paid overage configured. As of September 2026, the free allocation is 10,000 events over the last 30 days shared across the team; exceeding it pauses collection for 14 days, not the website. Start with default sampling for this low-traffic site and reduce `sampleRate` if usage approaches the cap. Free reports are limited; consult Vercel's current limits before changing plans. Verify data after a normal page visit and navigation away, since performance metrics can flush on blur/unload.
 
 Push a branch other than `main` to create an isolated Vercel Preview deployment. After verifying it, merge into `main` to deploy to production. Analytics defaults to production data; select the Preview environment in its dashboard to inspect preview visits.
 
@@ -61,6 +67,10 @@ npm start
 ```
 
 Open the printed preview URL. Confirm the app reaches **Saved locally**, change a life total, reload and confirm it persists, then open table setup and the scenario library. This preview serves static files only, without a server-rendering fallback. Saved sessions are browser/domain-local; there is no domain-migration step.
+
+## Dependency maintenance
+
+Dependabot checks npm dependencies weekly and limits version-update proposals to three open pull requests. Related React packages and Vinext/Vite build tools are grouped for minor/patch updates; major upgrades remain separate. No automatic merging is configured. Review release notes, run all checks, and test the Preview before merging, including for beta or patch releases. Security-update proposals use GitHub's separate security-update settings and are not restricted by the version-update PR limit.
 
 ## Configuration and secrets
 

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Analytics } from "@vercel/analytics/react";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 import "./globals.css";
 
 // These values are resolved at build time, never from untrusted request headers.
@@ -32,7 +33,10 @@ export default function RootLayout({
       <body>
         {children}
         {process.env.VERCEL === "1" && (
-          <Analytics configString={process.env.VERCEL_OBSERVABILITY_CLIENT_CONFIG} />
+          <>
+            <Analytics configString={process.env.VERCEL_OBSERVABILITY_CLIENT_CONFIG} />
+            <SpeedInsights configString={process.env.VERCEL_OBSERVABILITY_CLIENT_CONFIG} />
+          </>
         )}
       </body>
     </html>
