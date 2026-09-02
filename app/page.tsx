@@ -699,6 +699,7 @@ export default function Home() {
   }
 
   const sourceOpponent = game.opponents.find((opponent) => opponent.id === game.currentEvent.sourceId);
+  const sourceAvatarIndex = game.opponents.findIndex((opponent) => opponent.id === game.currentEvent.sourceId) + 1;
   const incomingDamageSteps = game.currentEvent.attackers
     ? buildDefaultCombatDamageSteps(game.currentEvent.attackers)
     : [];
@@ -1623,7 +1624,7 @@ export default function Home() {
             </div>
             <div className={`spell-art spell-art-${game.currentEvent.kind}`} aria-hidden="true"><span>{EVENT_PRESENTATION[game.currentEvent.kind].glyph}</span></div>
             <div className="encounter-copy">
-              <p className="source"><span className="avatar avatar-1">{game.currentEvent.sourceName.slice(0, 1)}</span> {game.currentEvent.sourceName} takes an action</p>
+              <p className="source"><span className={`avatar avatar-${sourceAvatarIndex}`}>{game.currentEvent.sourceName.slice(0, 1).toUpperCase()}</span> {game.currentEvent.sourceName} takes an action</p>
               <h2>{glossaryText(game.currentEvent.title, encounterGlossaryTerms)}</h2>
               {(game.currentEvent.kind === "development" || game.currentEvent.kind === "signature") && <p><strong>{game.currentEvent.kind === "development" ? "Signature card revealed:" : "Revealed signature card in use:"}</strong> <CardPreview name={game.currentEvent.card} /></p>}
               <p>{glossaryText(game.currentEvent.prompt, encounterGlossaryTerms)}</p>

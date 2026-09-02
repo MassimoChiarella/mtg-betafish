@@ -43,6 +43,47 @@ test("server-renders the MTG Betafish product shell and social metadata", async 
   assert.ok(encounter >= 0 && encounter < opponents && opponents < pressure, "mobile DOM order should be encounter, opponents, pressure");
 });
 
+test("event source avatar matches the opponent rail by identity", async () => {
+  const html = (await (await render()).text()).replace(/<!--.*?-->/g, "");
+  const source = html.match(/<p class="source"><span class="avatar (avatar-\d+)">([^<]+)<\/span> ([^<]+) takes an action<\/p>/);
+  assert.ok(source, "the event should identify its source with an avatar and name");
+  const rail = sourceSection(html, 'class="rail opponents-panel"', 'class="rail pressure-panel"');
+  assert.ok(rail.includes(`<span class="avatar ${source[1]}">${source[2]}</span><div class="opponent-copy"><strong>${source[3]}</strong>`), "the source colour and initial must match the same opponent in the rail");
+  assert.match(pageSource, /const sourceAvatarIndex = game\.opponents\.findIndex\(\(opponent\) => opponent\.id === game\.currentEvent\.sourceId\) \+ 1/);
+});
+
+test("theme colour pairs retain readable text and identifiable form fields", () => {
+  const tokens = Object.fromEntries([...cssSource.matchAll(/(--[\w-]+):\s*(#[\da-f]{6}|var\(--[\w-]+\));/gi)].map((match) => [match[1], match[2]]));
+  const resolve = (value) => value.startsWith("--") ? resolve(tokens[value]) : value.startsWith("var(") ? resolve(value.slice(4, -1)) : value;
+  const luminance = (colour) => {
+    const channels = resolve(colour).slice(1).match(/../g).map((channel) => parseInt(channel, 16) / 255).map((channel) => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4);
+    return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
+  };
+  const contrast = (foreground, background) => {
+    const a = luminance(foreground), b = luminance(background);
+    return (Math.max(a, b) + .05) / (Math.min(a, b) + .05);
+  };
+  const requireContrast = (foreground, background, minimum) => {
+    const ratio = contrast(foreground, background);
+    assert.ok(ratio >= minimum, `${foreground} on ${background}: ${ratio.toFixed(2)}:1 must reach ${minimum}:1`);
+  };
+  for (const background of ["--paper", "--surface", "--surface-soft", "--accent-soft", "#f4e9e4", "#ffe9e4"]) {
+    requireContrast("--ink", background, 4.5);
+    requireContrast("--muted", background, 4.5);
+  }
+  for (const background of ["--accent", "--accent-hover", "--coral-strong"]) requireContrast("#ffffff", background, 4.5);
+  for (const background of ["--ink", "--ink-soft"]) {
+    requireContrast("--muted-on-dark", background, 4.5);
+    requireContrast("--accent-light", background, 4.5);
+  }
+  requireContrast("--accent", "--accent-soft", 4.5);
+  for (const background of ["--paper", "--surface", "#fff7f3"]) requireContrast("--control-line", background, 3);
+  assert.match(cssSource, /\.bracket-guide > \.eyebrow \{ color: var\(--muted-on-dark\); \}/);
+  assert.match(cssSource, /\.countdown\.imminent \{ background: var\(--coral-strong\); \}/);
+  assert.match(sourceSection(cssSource, ".damage-inputs input, .settings-body input", ".damage-inputs input:focus"), /border: 1px solid var\(--control-line\)/);
+  assert.match(cssSource, /\.toxic-payment input, \.correction-form input \{[^}]*border: 1px solid var\(--control-line\)/);
+});
+
 test("game-over recovery preserves the expired round event, undo, correction, and explicit answer total", () => {
   const continuation = sourceSection(pageSource, "function continueAfterGameOver()", "function adjustLife(");
   assert.match(continuation, /eventCounter = addSafeInteger\(previous\.eventCounter, 1\)/);
