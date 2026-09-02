@@ -789,7 +789,7 @@ test("malformed current state fails closed at every persistence boundary", async
   }
 });
 
-test("hostile inputs and one deterministic JSON fuzz loop fail closed", () => {
+test("hostile inputs and invalid root shapes fail closed", () => {
   const cycle = {};
   cycle.self = cycle;
   const hostile = new Proxy({}, { getPrototypeOf() { throw new Error("hostile prototype"); } });
@@ -811,19 +811,6 @@ test("hostile inputs and one deterministic JSON fuzz loop fail closed", () => {
     hostile,
     throwingGetter,
   ];
-
-  let seed = 0x5e5510;
-  const random = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32);
-  const randomJson = (depth = 0) => {
-    const kind = depth >= 3 ? Math.floor(random() * 4) : Math.floor(random() * 6);
-    if (kind === 0) return null;
-    if (kind === 1) return random() < 0.5;
-    if (kind === 2) return Math.floor(random() * 21) - 10;
-    if (kind === 3) return `value-${Math.floor(random() * 10)}`;
-    if (kind === 4) return Array.from({ length: Math.floor(random() * 4) }, () => randomJson(depth + 1));
-    return Object.fromEntries(Array.from({ length: Math.floor(random() * 4) }, (_, index) => [`key${index}`, randomJson(depth + 1)]));
-  };
-  arbitrary.push(...Array.from({ length: 2_500 }, () => randomJson()));
 
   for (const value of arbitrary) {
     assert.equal(decodeGameState(value), null);

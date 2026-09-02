@@ -457,8 +457,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .damage-step legend { padding: 0 6px; color: var(--ink); font-size: 12px; font-weight: 700; }
 .damage-step-toggle { min-height: 32px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 .damage-step-toggle input { width: 18px; height: 18px; }
-.damage-step-disabled { background: var(--surface); opacity: .72; }
-.damage-step-disabled .damage-inputs { opacity: .58; }
+.damage-step:disabled { background: var(--surface); opacity: .72; }
+.damage-step:disabled .damage-inputs { opacity: .58; }
 .damage-inputs label, .settings-body label, .attacker-form > label, .target-select {
   display: grid;
   gap: 7px;

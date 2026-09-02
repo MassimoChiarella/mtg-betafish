@@ -731,32 +731,22 @@ export function resolveCombatDamage(input: {
   let lifeDamage = 0;
   let poisonAdded = 0;
   let lifelinkGain = 0;
-  let defeated = false;
-  let lossReason: CombatResolution["lossReason"] = null;
-  let lethalCommander: string | null = null;
+  let loss: TrackedLoss | null = null;
 
   for (const stepName of ["first", "regular"] as const) {
     const step = combineCombatDamageStep(steps, stepName);
     if (!step) continue;
-    const stepLifeDamage = safeAmount(step.lifeDamage);
-    const stepPoison = safeAmount(step.poisonCounters);
-    const stepLifelink = safeAmount(step.lifelinkGain);
-    Object.entries(safeDamageMap(step.commanderHits)).forEach(([source, damage]) => addCommanderHit(commanderDamage, source, damage));
-    life = subtractLife(life, stepLifeDamage);
-    poisonCounters = addAmounts(poisonCounters, stepPoison);
-    lifeDamage = addAmounts(lifeDamage, stepLifeDamage);
-    poisonAdded = addAmounts(poisonAdded, stepPoison);
-    lifelinkGain = addAmounts(lifelinkGain, stepLifelink);
+    Object.entries(step.commanderHits).forEach(([source, damage]) => addCommanderHit(commanderDamage, source, damage));
+    life = subtractLife(life, step.lifeDamage);
+    poisonCounters = addAmounts(poisonCounters, step.poisonCounters);
+    lifeDamage = addAmounts(lifeDamage, step.lifeDamage);
+    poisonAdded = addAmounts(poisonAdded, step.poisonCounters);
+    lifelinkGain = addAmounts(lifelinkGain, step.lifelinkGain);
     stepsApplied.push(stepName);
 
-    const loss = evaluateTrackedLoss({ life, poisonCounters, commanderDamage }, input.lossProtected);
-    if (loss) {
-      defeated = true;
-      lossReason = loss.reason;
-      lethalCommander = loss.lethalCommander;
-      break;
-    }
+    loss = evaluateTrackedLoss({ life, poisonCounters, commanderDamage }, input.lossProtected);
+    if (loss) break;
   }
 
-  return { life, poisonCounters, commanderDamage, defeated, lossReason, lethalCommander, stepsApplied, lifeDamage, poisonAdded, lifelinkGain };
+  return { life, poisonCounters, commanderDamage, defeated: Boolean(loss), lossReason: loss?.reason ?? null, lethalCommander: loss?.lethalCommander ?? null, stepsApplied, lifeDamage, poisonAdded, lifelinkGain };
 }

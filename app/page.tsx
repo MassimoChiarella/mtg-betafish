@@ -394,20 +394,20 @@ function CombatDamageStepFields({
 }) {
   const [enabled, setEnabled] = useState(enabledByDefault);
   return (
-    <fieldset className={`damage-step ${enabled ? "" : "damage-step-disabled"}`}>
+    <fieldset className="damage-step" disabled={!enabled}>
       <legend>
         <label className="damage-step-toggle">
           <input name={damageStepEnabledName(prefix, step.step)} type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
           {step.step === "first" ? "First-strike combat damage step" : "Regular combat damage step"}
         </label>
       </legend>
-      <div className="damage-inputs" aria-disabled={!enabled}>
-        <label>Life damage<input disabled={!enabled} name={damageFieldName(prefix, step.step, "life")} type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" defaultValue={step.lifeDamage} /></label>
-        <label>Poison counters added<input disabled={!enabled} name={damageFieldName(prefix, step.step, "poison")} type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" defaultValue={step.poisonCounters} /></label>
+      <div className="damage-inputs">
+        <label>Life damage<input name={damageFieldName(prefix, step.step, "life")} type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" defaultValue={step.lifeDamage} /></label>
+        <label>Poison counters added<input name={damageFieldName(prefix, step.step, "poison")} type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" defaultValue={step.poisonCounters} /></label>
         {Object.entries(step.commanderHits).map(([commanderId, damage]) => (
-          <label key={commanderId}>{commanderLabels[commanderId] ?? commanderId} damage<input disabled={!enabled} name={damageFieldName(prefix, step.step, "commander", commanderId)} type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" defaultValue={damage} /></label>
+          <label key={commanderId}>{commanderLabels[commanderId] ?? commanderId} damage<input name={damageFieldName(prefix, step.step, "commander", commanderId)} type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" defaultValue={damage} /></label>
         ))}
-        <label>Lifelink life gained<input disabled={!enabled} name={damageFieldName(prefix, step.step, "lifelink")} type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" defaultValue={step.lifelinkGain} /></label>
+        <label>Lifelink life gained<input name={damageFieldName(prefix, step.step, "lifelink")} type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" defaultValue={step.lifelinkGain} /></label>
       </div>
     </fieldset>
   );
@@ -718,7 +718,6 @@ export default function Home() {
     ...opponentCommanderLabels,
   };
   const livingOpponents = game.opponents.filter((opponent) => !opponent.eliminated);
-  const canCounterAgain = game.currentEvent.responseOptions.includes("counter");
   const activeThreatOwner = game.activeThreat ? game.opponents.find((opponent) => opponent.id === game.activeThreat?.ownerId) : undefined;
   const usedCommanderSlots = new Set(outgoingAttackers.flatMap((attacker) => attacker.isCommander && attacker.commanderSlot ? [attacker.commanderSlot] : []));
 
@@ -1373,26 +1372,28 @@ export default function Home() {
     setActiveModal(null);
   }
 
-  function startSeededRun() {
-    const configured = configuredSettingsOpponents();
-    if (!configured) return;
-    const seed = settingsSeed.trim() || "GILDED-732";
-    setSettingsTableError("");
-    const opponents = configured.map((opponent) => ({
+  function startRun(seed: string, opponents: readonly Opponent[]) {
+    const next = createInitialGame(seed, opponents.map((opponent) => ({
       ...opponent,
       life: 40,
       poisonCounters: 0,
       commanderDamage: {},
       lossProtected: false,
       eliminated: false,
-    }));
-    const next = createInitialGame(seed, opponents);
+    })));
     undoStack.current = [];
     gameRef.current = next;
     setToxicPaymentDraft({ eventId: "", value: "0" });
     setToxicPaymentError("");
     setGame(next);
     setActiveModal(null);
+  }
+
+  function startSeededRun() {
+    const configured = configuredSettingsOpponents();
+    if (!configured) return;
+    setSettingsTableError("");
+    startRun(settingsSeed.trim() || "GILDED-732", configured);
   }
 
   function openCombat() {
@@ -1541,14 +1542,7 @@ export default function Home() {
   }
 
   function resetSession() {
-    const seed = `CAST-${Date.now().toString(36).slice(-6).toUpperCase()}`;
-    undoStack.current = [];
-    const next = createInitialGame(seed, game.opponents.map((opponent) => ({ ...opponent, life: 40, poisonCounters: 0, commanderDamage: {}, lossProtected: false, eliminated: false })));
-    gameRef.current = next;
-    setToxicPaymentDraft({ eventId: "", value: "0" });
-    setToxicPaymentError("");
-    setGame(next);
-    setActiveModal(null);
+    startRun(`CAST-${Date.now().toString(36).slice(-6).toUpperCase()}`, game.opponents);
   }
 
   const maxUserCommanderDamage = highestCommanderDamage(game.userCommanderDamage);
@@ -1582,7 +1576,7 @@ export default function Home() {
     discarded: "Invalid saved draft discarded",
   };
   const liveMessage = (activeModal === "combat" && defense ? `Defense roll: ${defense.title}. ${defense.detail}` : null)
-    ?? (game.responseStage === "counterback" ? canCounterAgain ? "Your counter was countered. Choose whether to counter again or let the original action resolve." : "Your counter was countered. Let the original action resolve." : null)
+    ?? (game.responseStage === "counterback" ? "Your counter was countered. Choose whether to counter again or let the original action resolve." : null)
     ?? (game.responseStage === "choose" ? `Response choices are ready: ${game.currentEvent.responseOptions.join(", ")}.` : null)
     ?? (game.responseStage === "combat" ? "Ordered combat-damage fields are ready. Record life, poison, commander damage, and lifelink for each step." : null)
     ?? (game.responseStage !== "resolved" ? `${EVENT_PRESENTATION[game.currentEvent.kind].label}: ${game.currentEvent.title}` : game.resolution);
@@ -1705,9 +1699,9 @@ export default function Home() {
                 <div className="response-box counterback-box">
                   <span className="danger-badge" ref={responseStep} tabIndex={-1}><GlossaryTerm term="Counter">Counter</GlossaryTerm> to your counter</span>
                   <h3>Your answer is countered.</h3>
-                  <p>{canCounterAgain ? "The response window remains open. Continue the exchange or let the original action resolve." : "No further counter response is listed for this action; let the original action resolve."}</p>
-                  <div className={`response-actions ${canCounterAgain ? "two-actions" : ""}`}>
-                    {canCounterAgain && <button className="primary-button" type="button" onClick={() => answerEvent("counter")}>I counter again <span aria-hidden="true">→</span></button>}
+                  <p>The response window remains open. Continue the exchange or let the original action resolve.</p>
+                  <div className="response-actions two-actions">
+                    <button className="primary-button" type="button" onClick={() => answerEvent("counter")}>I counter again <span aria-hidden="true">→</span></button>
                     <button className="secondary-button" type="button" onClick={letEventResolve}>Let the original resolve</button>
                   </div>
                   <div className="choice-grid">{game.currentEvent.responseOptions.filter((option) => option !== "counter").map((option) => <button type="button" onClick={() => answerEvent(option)} key={option}><strong>{RESPONSE_PRESENTATION[option].title}</strong><small>{RESPONSE_PRESENTATION[option].detail}</small></button>)}</div>

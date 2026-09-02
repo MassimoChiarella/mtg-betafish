@@ -5,7 +5,6 @@ import worker from "../dist/server/index.js";
 
 const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 const cssSource = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-const storageSource = await readFile(new URL("../app/storage-session.ts", import.meta.url), "utf8");
 
 function sourceSection(source, start, end) {
   const startAt = source.indexOf(start);
@@ -173,8 +172,9 @@ test("combat editor exposes optional ordered steps and unique original commander
 
   assert.match(parser, /\["first", "regular"\][\s\S]*?filter\(\(step\) => data\.get\(damageStepEnabledName/);
   assert.match(fields, /\(\["first", "regular"\] as const\)\.map/);
-  assert.match(fields, /type="checkbox" checked=\{enabled\}/);
-  assert.match(fields, /disabled=\{!enabled\}/);
+  assert.match(sourceSection(fields, "<legend>", "</legend>"), /type="checkbox" checked=\{enabled\}/);
+  assert.match(fields, /<fieldset className="damage-step" disabled=\{!enabled\}>\s*<legend>/);
+  assert.match(cssSource, /\.damage-step:disabled \.damage-inputs\s*\{/);
   assert.match(addAttacker, /usedCommanderSlots\.has\(attackerCommanderSlot\)/);
   assert.match(addAttacker, /USER_COMMANDER_LABELS\[userCommanderKey\(attackerCommanderSlot\)\]/);
   assert.match(pageSource, /Your primary commander<\/option>/);
@@ -186,14 +186,9 @@ test("combat editor exposes optional ordered steps and unique original commander
 });
 
 test("local persistence uses revision envelopes, raw legacy reads, and explicit conflict choices", () => {
-  const reader = sourceSection(storageSource, "export function readStoredSession(", "export function decideStorageEvent(");
   const persistence = sourceSection(pageSource, "// Persistence is best-effort", "// Move focus only");
-  const seededRun = sourceSection(pageSource, "function startSeededRun()", "function openCombat()");
+  const startRun = sourceSection(pageSource, "function startRun(", "function startSeededRun()");
 
-  assert.match(reader, /"revision" in parsed && "state" in parsed/);
-  assert.match(reader, /decodeGameState\(\(parsed as \{ state\?: unknown \}\)\.state\)/);
-  assert.match(reader, /decodeGameState\(parsed\)/);
-  assert.match(storageSource, /function serializeGameState\(state: GameState\)[\s\S]*?const decoded = decodeGameState\(state\)[\s\S]*?decoded \? JSON\.stringify\(decoded\) : null/);
   assert.match(persistence, /const serialized = serializeGameState\(game\)/);
   assert.match(persistence, /const currentSerialization = serializeGameState\(gameRef\.current\)/);
   assert.match(persistence, /hasCompetingStoredSession\(stored, storageRevision\.current, savedSerialization\.current\)/);
@@ -209,15 +204,18 @@ test("local persistence uses revision envelopes, raw legacy reads, and explicit 
   assert.equal((pageSource.match(/\{storageConflictNotice\}/g) ?? []).length, 6);
   assert.match(pageSource, />Load saved version<\/button>/);
   assert.match(pageSource, />Keep this tab<\/button>/);
-  assert.match(seededRun, /createInitialGame\(seed, opponents\)/);
-  assert.match(seededRun, /undoStack\.current = \[\]/);
+  assert.match(startRun, /createInitialGame\(seed, opponents\.map/);
+  assert.match(startRun, /life: 40,[\s\S]*?poisonCounters: 0,[\s\S]*?commanderDamage: \{\},[\s\S]*?lossProtected: false,[\s\S]*?eliminated: false/);
+  assert.match(startRun, /undoStack\.current = \[\]/);
+  assert.match(startRun, /gameRef\.current = next[\s\S]*?setGame\(next\)[\s\S]*?setActiveModal\(null\)/);
   assert.match(pageSource, />Start new run with this seed/);
 });
 
 test("state replacement clears Toxic input and table edits retain commander identity clarity", () => {
   const commanderGuard = sourceSection(pageSource, "function hasTrackedCommanderDamageFromRemovedOpponent", "function trackedLossReason");
   const loadConflict = sourceSection(pageSource, "function loadSavedConflict()", "function keepLocalConflict()");
-  const saveSettings = sourceSection(pageSource, "function saveSettings()", "function startSeededRun()");
+  const saveSettings = sourceSection(pageSource, "function saveSettings()", "function startRun(");
+  const startRun = sourceSection(pageSource, "function startRun(", "function startSeededRun()");
   const seededRun = sourceSection(pageSource, "function startSeededRun()", "function openCombat()");
   const reset = sourceSection(pageSource, "function resetSession()", "const maxUserCommanderDamage");
 
@@ -225,8 +223,11 @@ test("state replacement clears Toxic input and table edits retain commander iden
   assert.match(commanderGuard, /retainedLedgers\.some\(\(ledger\) => \(ledger\[commanderId\] \?\? 0\) > 0\)/);
   assert.match(saveSettings, /hasTrackedCommanderDamageFromRemovedOpponent\(game, opponents\)/);
   assert.match(saveSettings, /Use Start new run with this seed to remove them without losing the original commander identity/);
+  assert.doesNotMatch(saveSettings, /startRun\(/);
+  assert.match(seededRun, /configuredSettingsOpponents\(\)[\s\S]*?if \(!configured\) return;[\s\S]*?startRun\(settingsSeed\.trim\(\) \|\| "GILDED-732", configured\)/);
+  assert.match(reset, /startRun\(`CAST-\$\{Date\.now\(\)\.toString\(36\)\.slice\(-6\)\.toUpperCase\(\)\}`, game\.opponents\)/);
 
-  for (const replacement of [loadConflict, saveSettings, seededRun, reset]) {
+  for (const replacement of [loadConflict, saveSettings, startRun]) {
     assert.match(replacement, /setToxicPaymentDraft\(\{ eventId: "", value: "0" \}\)/);
     assert.match(replacement, /setToxicPaymentError\(""\)/);
   }
@@ -271,7 +272,10 @@ test("accessible client contracts use one game-over announcement and native comb
   assert.equal(pageSource.match(/<span aria-live="polite" aria-atomic="true">Poison/g)?.length ?? 0, 2);
   assert.match(pageSource, /className="secondary-wide" type="button" onClick=\{openCombat\}/);
   assert.match(pageSource, /className="link-button top-action" type="button" onClick=\{openSettings\}/);
-  assert.match(sourceSection(pageSource, '{game.responseStage === "counterback"', '{game.responseStage === "combat"'), /\{canCounterAgain && <button[\s\S]*?I counter again/);
+  const counterback = sourceSection(pageSource, '{game.responseStage === "counterback"', '{game.responseStage === "prompt" && game.currentEvent.kind === "attack"');
+  assert.match(counterback, /onClick=\{\(\) => answerEvent\("counter"\)\}>I counter again/);
+  assert.match(counterback, /onClick=\{letEventResolve\}>Let the original resolve/);
+  assert.match(counterback, /responseOptions\.filter\(\(option\) => option !== "counter"\)/);
   assert.match(pageSource, /className="resolved-mark" aria-hidden="true"/);
   assert.match(pageSource, /className="empty-threat"><span aria-hidden="true"/);
   assert.match(pageSource, /className=\{`history-dot \$\{entry\.tone\}`\} aria-hidden="true"/);

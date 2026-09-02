@@ -1,5 +1,8 @@
 import {
+  COMMANDER_BRACKETS,
+  DECK_PROFILES,
   EVENT_TEMPLATES,
+  KEYWORD_DEFINITIONS,
   SIGNATURE_USE_TEMPLATE_ID,
   evaluateTrackedLoss,
   opponentCommanderKey,
@@ -53,22 +56,10 @@ export type GameState = {
 
 type UnknownRecord = Record<string, unknown>;
 
-const PROFILES = new Set<string>(["midrange", "control", "swarm", "voltron", "combo", "graveyard"]);
-const BRACKETS = new Set<unknown>([1, 2, 3, 4, 5]);
+const PROFILES = new Set(Object.keys(DECK_PROFILES));
+const BRACKETS = new Set<unknown>(Object.keys(COMMANDER_BRACKETS).map(Number));
 const EVENT_KINDS = new Set<string>(["targeted", "wipe", "counter", "disruption", "attack", "threat", "development", "signature"]);
-const KEYWORDS = new Set<string>([
-  "Flying",
-  "Reach",
-  "Trample",
-  "Menace",
-  "Vigilance",
-  "Deathtouch",
-  "First strike",
-  "Double strike",
-  "Haste",
-  "Lifelink",
-  "Infect",
-]);
+const KEYWORDS = new Set(Object.keys(KEYWORD_DEFINITIONS));
 const RESPONSE_STAGES = new Set<string>(["prompt", "choose", "counterback", "combat", "resolved"]);
 const RESPONSE_OPTIONS = new Set<string>(["counter", "protect", "redirect", "custom"]);
 const HISTORY_TONES = new Set<string>(["success", "damage", "warning", "neutral"]);
