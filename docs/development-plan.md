@@ -13,7 +13,7 @@ This plan implements the agreed application assessment in independently tested, 
   - Separate catalog metadata from structural save validation and migrate older sessions.
   - Preserve a recoverable prior save; never silently destroy invalid imports.
   - Add validated session export, import, and backup recovery.
-- [ ] **3. Browser regression and release gates**
+- [x] **3. Browser regression and release gates**
   - Automate gameplay, responses, combat, undo, reload, elimination and cross-tab conflicts.
   - Cover mobile preview recovery and keyboard operation.
   - Run deterministic engine checks and browser tests in GitHub Actions.
@@ -52,3 +52,4 @@ Each implementation milestone updates this file with its verification evidence a
 - **Plan baseline:** clean `main` at `06c35d4`; prior assessment passed build, lint, typecheck and 208 tests. No measured browser latency claim is carried forward from bundle sizes alone.
 - **Milestone 1:** targeted spells now confirm resolution status and target controller, including Swords power and legal indestructible targets; preview failures offer Retry and a Scryfall reference. Production build, lint, typecheck and all 212 Node tests pass. Browser workflow coverage follows in milestone 3.
 - **Milestone 2:** schema 7 separates catalog revision from structural checks. v6 protected totals and paid costs survive migration. Writes preserve a prior valid save or quarantine incompatible raw data before replacement. Export/import/recovery are size-bounded and validated, including from game over. Build, typecheck, lint and the full Node suite pass; migration, quota-failure, quarantine and portable-file tests added.
+- **Milestone 3:** 14 real Chromium desktop/mobile journeys pass against the static production export. Tests cover imported scenarios, Swords accounting, illegal targets, locked Toxic costs, counterback reload, lethal combat/undo, cross-tab choices and failed-image retry. GitHub Actions now runs the full release gate on pushes/PRs. Browser child-process cleanup was verified outside the restrictive Windows process sandbox.

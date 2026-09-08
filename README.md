@@ -1,5 +1,13 @@
 # MTG Betafish
 
+## Development milestones and release checks
+
+The active roadmap and verification ledger are in [docs/development-plan.md](docs/development-plan.md).
+
+Run `npm ci`, then `npx playwright install chromium` once. `npm run check:release` runs lint, types, the production build, deterministic Node tests, and desktop/mobile Chromium gameplay tests against the static export. GitHub Actions runs the same release gate on every push and pull request and preserves failure traces. Windows sandboxed runners need permission to terminate their own browser/server child processes.
+
+Saved sessions use a separately versioned scenario catalog. **Save / restore** exports or imports validated JSON, recovers the previous valid autosave, and downloads preserved incompatible data. It is also available from game over. Files are limited to 1 MiB; importing never accepts a file's storage revision. A failed backup prevents replacement of the primary save.
+
 A browser companion for stress-testing Magic: The Gathering Commander decks while playing them in a separate playtester such as Archidekt. MTG Betafish supplies the missing table: targeted interaction, wipes, counters, round-scaled combat, defensive rolls, and countdown threats.
 
 ## Run locally

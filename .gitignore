@@ -5,6 +5,9 @@
 /dist/
 /.wrangler/
 /work/
+/test-results/
+/playwright-report/
+/debug.log
 *.tsbuildinfo
 
 # Local AI-agent tooling

@@ -12,7 +12,9 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "lint": "eslint .",
     "typecheck": "vinext typegen && tsc --noEmit",
-    "check": "npm run lint && npm run typecheck && npm test"
+    "check": "npm run lint && npm run typecheck && npm test",
+    "test:browser": "playwright test",
+    "check:release": "npm run check && npm run test:browser"
   },
   "dependencies": {
     "@vercel/analytics": "2.0.1",
@@ -24,6 +26,7 @@
     "@eslint/js": "9.39.4",
     "@next/eslint-plugin-next": "16.2.6",
     "@openai/sites-vite-plugin": "0.1.0",
+    "@playwright/test": "1.63.0",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@vitejs/plugin-react": "6.0.2",
