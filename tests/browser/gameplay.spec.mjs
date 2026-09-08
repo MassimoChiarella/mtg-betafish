@@ -90,3 +90,37 @@ test("failed previews expose retry and a keyboard-accessible reference", async (
   await expect(page.getByText("Card image unavailable.", { exact: false })).toHaveCount(0);
   await page.keyboard.press("Escape");
 });
+
+test("an expired Oracle clock opens an answerable win attempt", async ({ page }) => {
+  const game = fixture("combo-clock", { responseStage: "resolved" });
+  game.activeThreat = { ...game.currentEvent.threat, remaining: 1 };
+  await loadFixture(page, game);
+  await page.getByRole("button", { name: /Next round/ }).click();
+  await expect(page.getByRole("button", { name: "I stopped the attempt" })).toBeVisible();
+  expect((await stored(page)).gameOver).toBeNull();
+  await page.reload();
+  await page.getByRole("button", { name: "I stopped the attempt" }).click();
+  await expect.poll(async () => (await stored(page)).answeredCount).toBe(1);
+});
+
+test("Reservoir payment reload and nonlethal damage continue the run", async ({ page }) => {
+  const game = fixture("artifact-clock", { responseStage: "resolved", userLife: 60 });
+  game.opponents[0].life = 60; game.activeThreat = { ...game.currentEvent.threat, remaining: 1 };
+  await loadFixture(page, game);
+  await page.getByRole("button", { name: /Next round/ }).click();
+  await page.getByRole("button", { name: "Pay 50 life and activate" }).click();
+  await expect.poll(async () => (await stored(page)).opponents[0].life).toBe(10);
+  await page.reload();
+  await page.getByRole("button", { name: "Resolve activation damage" }).click();
+  await expect.poll(async () => (await stored(page)).userLife).toBe(10);
+  expect((await stored(page)).gameOver).toBeNull();
+});
+
+test("a defended Craterhoof attempt is not an automatic loss", async ({ page }) => {
+  const game = fixture("combat-clock", { responseStage: "resolved" }); game.activeThreat = { ...game.currentEvent.threat, remaining: 1 };
+  await loadFixture(page, game);
+  await page.getByRole("button", { name: /Next round/ }).click();
+  await page.getByRole("button", { name: "Fog / stop combat" }).click();
+  await expect.poll(async () => (await stored(page)).responseStage).toBe("resolved");
+  expect((await stored(page)).gameOver).toBeNull();
+});

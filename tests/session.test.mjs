@@ -107,6 +107,7 @@ function currentState() {
     responseStage: "choose",
     resolution: "",
     toxicDelugePayment: null,
+    reservoirPayment: null,
     activeThreat: {
       id: "threat-one",
       ownerId: "one",

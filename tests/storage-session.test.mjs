@@ -68,6 +68,7 @@ function gameState(userLife = 40) {
     responseStage: "prompt",
     resolution: "",
     toxicDelugePayment: null,
+    reservoirPayment: null,
     activeThreat: null,
     recentTemplateIds: [],
     history: [{ id: "start", turn: 1, title: "Session started", detail: "Started.", tone: "neutral" }],

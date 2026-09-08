@@ -2,6 +2,7 @@ import {
   COMMANDER_BRACKETS,
   DECK_PROFILES,
   EVENT_TEMPLATES,
+  WIN_ATTEMPTS,
   KEYWORD_DEFINITIONS,
   developmentEvent,
   evaluateTrackedLoss,
@@ -47,6 +48,7 @@ export type GameState = {
   responseStage: ResponseStage;
   resolution: string;
   toxicDelugePayment: { eventId: string; amount: number } | null;
+  reservoirPayment: string | null;
   activeThreat: Threat | null;
   recentTemplateIds: string[];
   history: HistoryEntry[];
@@ -119,7 +121,8 @@ function readThreat(value: unknown, opponentIds: ReadonlySet<string>, allowExpir
     || typeof value.description !== "string"
     || !isCount(value.remaining)
     || (!allowExpired && value.remaining === 0)
-    || typeof value.delayed !== "boolean") return undefined;
+    || typeof value.delayed !== "boolean"
+    || (value.templateId !== undefined && !EVENT_TEMPLATES.some((template) => template.id === value.templateId && template.kind === "threat"))) return undefined;
 
   return {
     id: value.id,
@@ -128,6 +131,7 @@ function readThreat(value: unknown, opponentIds: ReadonlySet<string>, allowExpir
     description: value.description,
     remaining: value.remaining,
     delayed: value.delayed,
+    ...(typeof value.templateId === "string" ? { templateId: value.templateId } : {}),
   };
 }
 
@@ -267,7 +271,7 @@ function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: nu
   if (value.emptyOutcome !== undefined && typeof value.emptyOutcome !== "string") return undefined;
   if (version >= 5 && !responseOptions) return undefined;
 
-  const template = EVENT_TEMPLATES.find((candidate) => candidate.id === value.templateId);
+  const template = [...EVENT_TEMPLATES, ...WIN_ATTEMPTS].find((candidate) => candidate.id === value.templateId);
   const dynamicMetadata = template ? null
     : value.kind === "signature" && value.templateId === SIGNATURE_USE_TEMPLATE_ID ? LEGACY_SIGNATURE_METADATA
       : responseMetadataForEvent(value.templateId, value.kind as EventKind);
@@ -446,6 +450,9 @@ export function decodeGameState(raw: unknown): GameState | null {
     if ((toxicDelugePayment && (currentEvent.templateId !== "minus-wipe" || toxicDelugePayment.eventId !== currentEvent.id || responseStage === "prompt"))
       || (currentEvent.templateId === "minus-wipe" && (responseStage === "choose" || responseStage === "counterback") && !toxicDelugePayment)) return null;
     const threatOwner = activeThreat ? opponents.find((opponent) => opponent.id === activeThreat.ownerId) : undefined;
+    const reservoirPayment = raw.reservoirPayment ?? null;
+    if ((reservoirPayment !== null && (reservoirPayment !== currentEvent.id || currentEvent.templateId !== "reservoir-attempt" || responseStage === "prompt"))
+      || (currentEvent.templateId === "reservoir-attempt" && responseStage === "choose" && !reservoirPayment)) return null;
     const currentThreat = currentEvent.threat;
     if (!eventSource || currentEvent.sourceName !== eventSource.name
       || !hasCompatibleStage(currentEvent, responseStage)
@@ -523,6 +530,7 @@ export function decodeGameState(raw: unknown): GameState | null {
       responseStage,
       resolution,
       toxicDelugePayment,
+      reservoirPayment: reservoirPayment as string | null,
       activeThreat,
       recentTemplateIds,
       history,

@@ -46,6 +46,7 @@ export type Threat = {
   description: string;
   remaining: number;
   delayed: boolean;
+  templateId?: string;
 };
 
 export type SimEvent = {
@@ -307,6 +308,31 @@ export const EVENT_TEMPLATES: EventTemplate[] = [
 
 export function gameChangerIdentity(card: string) {
   return card === "Thassa’s Oracle line" ? "Thassa’s Oracle" : card;
+}
+
+// These are reached only by an expiring clock, never by a random event roll.
+export const WIN_ATTEMPTS: Array<Pick<SimEvent, "kind" | "title" | "prompt" | "card" | "responseOptions"> & { id: string; emptyOutcome?: string }> = [
+  { id: "oracle-attempt", kind: "disruption", title: "Oracle’s trigger is on the stack.", prompt: "The creature spell is not the win. Respond to the triggered ability or the library-changing line; on resolution, compare devotion to blue with cards in its controller’s library and check whether that player can win.", card: "Thassa’s Oracle", responseOptions: ["custom"] },
+  { id: "reservoir-attempt", kind: "disruption", title: "Reservoir is ready to fire.", prompt: "The controller must pay 50 life before anyone responds. If they leave the game after paying, their ability is removed. Otherwise resolve interaction, then confirm damage to its final target.", card: "Aetherflux Reservoir", responseOptions: ["custom"] },
+  { id: "craterhoof-attempt", kind: "attack", title: "The overrun reaches combat.", prompt: "Resolve Craterhoof’s spell and triggered ability in your playtester, then this combat. The suggested army includes Craterhoof and its +X/+X boost; adjust final damage for the actual surviving attackers, blockers and effects. A stopped setup or defended attack is not an automatic loss.", card: "Craterhoof Behemoth", responseOptions: [] },
+  { id: "custom-attempt", kind: "disruption", title: "Resolve the saved win attempt.", prompt: "This older saved clock has no identifiable card. Confirm its actual win condition in your playtester, or record that the line was answered or is no longer viable.", card: "Saved win attempt", responseOptions: ["custom"] },
+];
+
+export function isWinAttempt(event: Pick<SimEvent, "templateId">) {
+  return WIN_ATTEMPTS.some((attempt) => attempt.id === event.templateId);
+}
+
+export function winAttemptEvent(threat: Threat, source: Opponent, turn: number, counter: number, seed: string): SimEvent {
+  const original = threat.templateId ?? EVENT_TEMPLATES.find((template) => template.kind === "threat" && template.title === threat.title)?.id;
+  const attemptId = original === "combo-clock" ? "oracle-attempt" : original === "artifact-clock" ? "reservoir-attempt" : original === "combat-clock" ? "craterhoof-attempt" : "custom-attempt";
+  const template = WIN_ATTEMPTS.find((attempt) => attempt.id === attemptId)!;
+  const event: SimEvent = { ...template, id: `attempt-${turn}-${counter}`, templateId: attemptId, sourceId: source.id, sourceName: source.name, tags: ["Win attempt"], responseOptions: [...template.responseOptions] };
+  if (attemptId === "craterhoof-attempt") {
+    const army = generateCombatDeclaration(rngFor(`${seed}:${event.id}`), turn, source, COMMANDER_BRACKETS[source.bracket].pace, event.id);
+    const x = army.length + 1;
+    event.attackers = [...army.map((attacker) => ({ ...attacker, power: attacker.power + x, toughness: attacker.toughness + x, keywords: [...new Set<Keyword>([...attacker.keywords, "Trample"])] })), { id: `${event.id}-hoof`, name: "Craterhoof Behemoth", power: 5 + x, toughness: 5 + x, keywords: ["Trample", "Haste"], isCommander: false }];
+  }
+  return event;
 }
 
 const scenarioGameChangers = EVENT_TEMPLATES
@@ -587,6 +613,7 @@ export function generateEvent(input: {
       description: template.prompt,
       remaining: bracketRules.threatClock,
       delayed: false,
+      templateId: template.id,
     } : undefined,
   };
 }

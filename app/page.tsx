@@ -11,6 +11,7 @@ import {
   evaluateTrackedLoss,
   GAME_CHANGER_CARDS,
   generateEvent,
+  isWinAttempt,
   GLOSSARY_DEFINITIONS,
   nonnegativeSafeInteger,
   normalizeCommanderBracket,
@@ -55,6 +56,7 @@ import {
 } from "./storage-session";
 import { scryfallImageUrl, scryfallReferenceUrl } from "./scryfall";
 import { spellOutcome, type SpellResult } from "./spell-outcome";
+import { expireThreat, payReservoir, reservoirDamage } from "./win-attempt";
 
 type OutgoingAttacker = {
   id: string;
@@ -118,6 +120,7 @@ function createInitialGame(seed = "GILDED-732", opponents: readonly Opponent[] =
     responseStage: "prompt",
     resolution: "",
     toxicDelugePayment: null,
+    reservoirPayment: null,
     activeThreat: null,
     recentTemplateIds: [],
     history: [{ id: "session-start", turn: 1, title: "Session started", detail: "The simulated table is live.", tone: "neutral" }],
@@ -480,6 +483,7 @@ export default function Home() {
   const [toxicPaymentError, setToxicPaymentError] = useState("");
   const [pendingOutcome, setPendingOutcome] = useState<{ answered: boolean } | null>(null);
   const [outcomeError, setOutcomeError] = useState("");
+  const [attemptError, setAttemptError] = useState("");
 
   useEffect(() => {
     gameRef.current = game;
@@ -1047,6 +1051,7 @@ export default function Home() {
   }
 
   function advanceTurn() {
+    setAttemptError("");
     commit((previous) => {
       const userLoss = trackedLossReason("You", previous.userLife, previous.userPoisonCounters, previous.userCommanderDamage, previous.userLossProtected);
       if (userLoss) return { ...previous, gameOver: userLoss };
@@ -1058,21 +1063,11 @@ export default function Home() {
         return { ...previous, opponents, activeThreat: null, gameOver: "You eliminated every simulated opponent." };
       }
       const turn = addSafeInteger(previous.turn, 1);
+      const expired = expireThreat({ ...previous, opponents }, turn);
+      if (expired) return { ...previous, ...expired, history: [historyEntry({ ...previous, turn }, "Win attempt begins", "The clock expires. Resolve the actual attempt before deciding whether anyone wins.", "warning"), ...previous.history].slice(0, 40) };
       let activeThreat = previous.activeThreat;
       if (activeThreat) {
         activeThreat = { ...activeThreat, remaining: Math.max(0, addSafeInteger(activeThreat.remaining, -1)) };
-        if (activeThreat.remaining <= 0) {
-          const owner = previous.opponents.find((opponent) => opponent.id === activeThreat?.ownerId);
-          const threatTitle = activeThreat.title.replace(/[.!?]+$/, "");
-          const reason = `${owner?.name ?? "An opponent"} completes ${threatTitle}. The unresolved threat wins the simulated game.`;
-          return {
-            ...previous,
-            turn,
-            activeThreat: null,
-            gameOver: reason,
-            history: [historyEntry({ ...previous, turn }, "Threat triggered", reason, "warning"), ...previous.history].slice(0, 40),
-          };
-        }
       }
       const recentTemplateIds = [previous.currentEvent.templateId, ...previous.recentTemplateIds].slice(0, 3);
       const eventCounter = addSafeInteger(previous.eventCounter, 1);
@@ -1094,6 +1089,7 @@ export default function Home() {
         responseStage: "prompt",
         resolution: "",
         toxicDelugePayment: null,
+        reservoirPayment: null,
         counterExchange: 0,
         activeThreat,
         recentTemplateIds,
@@ -1123,6 +1119,7 @@ export default function Home() {
         responseStage: "prompt",
         resolution: "",
         toxicDelugePayment: null,
+        reservoirPayment: null,
         counterExchange: 0,
       };
     });
@@ -1165,6 +1162,26 @@ export default function Home() {
         } : {}),
       };
     });
+  }
+
+  function activateReservoir() {
+    try {
+      const patch = payReservoir(game);
+      commit((previous) => ({ ...previous, ...patch, history: [historyEntry(previous, "Reservoir activation cost", patch.resolution!, "warning"), ...previous.history].slice(0, 40) }));
+      setAttemptError("");
+    } catch (error) { setAttemptError(error instanceof Error ? error.message : "Unable to pay this cost."); }
+  }
+
+  function submitReservoirDamage(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const target = String(data.get("reservoir-target"));
+    const damage = Number(data.get("reservoir-damage"));
+    try {
+      const patch = reservoirDamage(game, target, damage);
+      resolveEvent("Reservoir activation resolved", `${target === "user" ? "You take" : `${game.opponents.find((opponent) => opponent.id === target)?.name} takes`} ${damage} damage from Reservoir. Its 50-life cost was already recorded.`, "damage", patch);
+      setAttemptError("");
+    } catch (error) { setAttemptError(error instanceof Error ? error.message : "Check the final damage."); }
   }
 
   function adjustLife(target: "user" | string, amount: number) {
@@ -1389,6 +1406,7 @@ export default function Home() {
         responseStage: "prompt",
         resolution: "",
         toxicDelugePayment: null,
+        reservoirPayment: null,
         counterExchange: 0,
         activeThreat,
         recentTemplateIds,
@@ -1576,7 +1594,7 @@ export default function Home() {
   const maxUserCommanderDamage = highestCommanderDamage(game.userCommanderDamage);
   const tableDefeated = game.opponents.every((opponent) => opponent.eliminated);
   const userDefeated = Boolean(evaluateTrackedLoss({ life: game.userLife, poisonCounters: game.userPoisonCounters, commanderDamage: game.userCommanderDamage }, game.userLossProtected));
-  const eventCardLookup = game.currentEvent.kind === "attack" || game.currentEvent.kind === "development" || game.currentEvent.templateId === "random-discard"
+  const eventCardLookup = (game.currentEvent.kind === "attack" && !isWinAttempt(game.currentEvent)) || game.currentEvent.kind === "development" || game.currentEvent.templateId === "random-discard" || game.currentEvent.templateId === "custom-attempt"
     ? null
     : game.currentEvent.card === "Thassa’s Oracle line" ? "Thassa’s Oracle" : game.currentEvent.card;
   // eslint-disable-next-line react-hooks/refs -- commit, undo, and reset pair each stack mutation with a game-state render
@@ -1698,7 +1716,27 @@ export default function Home() {
                 && (game.responseStage === "choose" || game.responseStage === "counterback")
                 && game.toxicDelugePayment?.eventId === game.currentEvent.id
                 && <p className="toxic-payment-locked">Toxic Deluge’s casting cost is paid and locked: {game.toxicDelugePayment.amount} life, so X = {game.toxicDelugePayment.amount} for this response window.</p>}
-              {game.responseStage === "prompt" && game.currentEvent.kind !== "attack" && game.currentEvent.kind !== "development" && (
+              {isWinAttempt(game.currentEvent) && game.currentEvent.kind !== "attack" && game.responseStage !== "resolved" && (
+                <div className="response-box">
+                  <span className="eyebrow">Resolve the actual win attempt</span>
+                  {game.currentEvent.templateId === "reservoir-attempt" ? <>
+                    {game.reservoirPayment !== game.currentEvent.id ? <button className="primary-button" type="button" onClick={activateReservoir}>Pay 50 life and activate</button> : <form className="correction-form" onSubmit={submitReservoirDamage}>
+                      <p>{game.resolution} Removing Reservoir alone does not counter its activated ability.</p>
+                      <label>Final damage target<select name="reservoir-target"><option value="user">You</option>{livingOpponents.map((opponent) => <option value={opponent.id} key={opponent.id}>{opponent.name}</option>)}</select></label>
+                      <label>Damage after prevention / replacement<input name="reservoir-damage" type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" defaultValue="50" required /></label>
+                      <small>If redirected to an untracked creature, enter zero player damage and resolve that creature’s damage in your playtester.</small>
+                      <button type="submit" className="primary-button">Resolve activation damage</button>
+                    </form>}
+                  </> : <form onSubmit={(event) => { event.preventDefault(); resolveEvent("Win condition confirmed", `${game.currentEvent.sourceName} wins after the actual ${game.currentEvent.card} condition resolves.`, "warning", { gameOver: `${game.currentEvent.sourceName}’s ${game.currentEvent.card} win condition was confirmed in the playtester.` }); }}>
+                    <label className="check-label"><input type="checkbox" required name="win-condition-confirmed" />The win condition is met on resolution, and no rule or effect prevents this player from winning.</label>
+                    <button type="submit" className="primary-button">Confirm opponent wins</button>
+                  </form>}
+                  {attemptError && <p role="alert" className="inline-error">{attemptError}</p>}
+                  <div className="response-actions"><button type="button" className="secondary-button" onClick={() => resolveEvent("Win attempt answered", "The actual win attempt was stopped by a legal answer in the playtester.", "success", {}, true)}>I stopped the attempt</button><button type="button" className="text-button" onClick={() => resolveEvent("Win attempt not viable", "The line cannot complete its required win condition. Continue playing.", "neutral")}>No longer viable</button></div>
+                </div>
+              )}
+
+              {game.responseStage === "prompt" && game.currentEvent.kind !== "attack" && game.currentEvent.kind !== "development" && !isWinAttempt(game.currentEvent) && (
                 <div className="response-box">
                   <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>Do you have a response?</span>{game.currentEvent.kind !== "threat" && (game.currentEvent.kind === "targeted" || game.currentEvent.kind === "counter") && <GlossaryHelp terms={["Legal target"]} />}</div>
                   <div className="response-actions">
@@ -1718,7 +1756,7 @@ export default function Home() {
                 </div>
               )}
 
-              {game.responseStage === "choose" && (
+              {game.responseStage === "choose" && !isWinAttempt(game.currentEvent) && (
                 <div className="response-box response-choice-box">
                   <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>Choose the line you used</span><GlossaryHelp terms={["Counter", "Hexproof", "Indestructible", "Phase out", "Legal target", "Sacrifice", "Blink", "Bounce"]} /></div>
                   <div className="choice-grid">{game.currentEvent.responseOptions.map((option) => <button type="button" onClick={() => answerEvent(option)} key={option}><strong>{RESPONSE_PRESENTATION[option].title}</strong><small>{RESPONSE_PRESENTATION[option].detail}</small></button>)}</div>

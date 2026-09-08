@@ -17,7 +17,7 @@ This plan implements the agreed application assessment in independently tested, 
   - Automate gameplay, responses, combat, undo, reload, elimination and cross-tab conflicts.
   - Cover mobile preview recovery and keyboard operation.
   - Run deterministic engine checks and browser tests in GitHub Actions.
-- [ ] **4. Playable win attempts**
+- [x] **4. Playable win attempts**
   - Convert expiring clocks into answerable encounters rather than automatic losses.
   - Give Oracle, Reservoir, and Craterhoof distinct completion checks.
   - Preserve loss protection, owner elimination, undo and reload behavior.
@@ -53,3 +53,4 @@ Each implementation milestone updates this file with its verification evidence a
 - **Milestone 1:** targeted spells now confirm resolution status and target controller, including Swords power and legal indestructible targets; preview failures offer Retry and a Scryfall reference. Production build, lint, typecheck and all 212 Node tests pass. Browser workflow coverage follows in milestone 3.
 - **Milestone 2:** schema 7 separates catalog revision from structural checks. v6 protected totals and paid costs survive migration. Writes preserve a prior valid save or quarantine incompatible raw data before replacement. Export/import/recovery are size-bounded and validated, including from game over. Build, typecheck, lint and the full Node suite pass; migration, quota-failure, quarantine and portable-file tests added.
 - **Milestone 3:** 14 real Chromium desktop/mobile journeys pass against the static production export. Tests cover imported scenarios, Swords accounting, illegal targets, locked Toxic costs, counterback reload, lethal combat/undo, cross-tab choices and failed-image retry. GitHub Actions now runs the full release gate on pushes/PRs. Browser child-process cleanup was verified outside the restrictive Windows process sandbox.
+- **Milestone 4:** expiring clocks become answerable Oracle, Reservoir or Craterhoof encounters. Reservoir locks a payable 50-life cost, checks source departure and records actual damage; Oracle requires explicit win-condition confirmation; Craterhoof uses editable combat. Unknown legacy clocks get a manual-condition encounter. Build, lint, typecheck, full Node suite and 20 desktop/mobile browser journeys pass. Ordinary Commander win effects are distinct from tracked numeric losses (CR 104.2b; limited range of influence is not modeled).
