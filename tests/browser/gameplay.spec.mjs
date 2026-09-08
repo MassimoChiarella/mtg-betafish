@@ -209,3 +209,41 @@ test("multi-defender combat applies once and undo restores the whole snapshot", 
   expect((await stored(page)).activeThreat.remaining).toBe(2);
   expect((await stored(page)).responseStage).toBe("prompt");
 });
+
+test("preset drafts leave live totals alone until a new run is explicitly started", async ({ page, context }) => {
+  const game = fixture(undefined, { userLife: 27 }); game.opponents[0].life = 19;
+  await loadFixture(page, game);
+  await page.getByRole("button", { name: "Table setup", exact: true }).click();
+  await page.getByLabel("Preset name", { exact: true }).fill("Friday table");
+  await page.getByRole("combobox", { name: "New-run cadence", exact: true }).selectOption("table");
+  await page.getByRole("button", { name: "Save matchup preset", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Load Friday table", exact: true })).toBeVisible();
+  const second = await context.newPage(); await second.goto("/");
+  await second.getByRole("button", { name: "Table setup", exact: true }).click();
+  await expect(second.getByRole("button", { name: "Load Friday table", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Load Friday table", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Apply and reroll", exact: true })).toBeDisabled();
+  expect((await stored(page)).userLife).toBe(27);
+  expect((await stored(page)).opponents[0].life).toBe(19);
+  await page.getByRole("button", { name: "Delete Friday table", exact: true }).click();
+  await expect(second.getByRole("button", { name: "Load Friday table", exact: true })).toHaveCount(0);
+  await second.close();
+  await page.getByRole("button", { name: /Start new run with this seed/ }).click();
+  await expect.poll(async () => (await stored(page)).userLife).toBe(40);
+  expect((await stored(page)).opponents[0].life).toBe(40);
+  expect((await stored(page)).roundMode).toBe("table");
+  expect((await stored(page)).turn).toBe(1);
+});
+
+test("terminal review shows all retained entries and the exact ending cause", async ({ page }) => {
+  const history = Array.from({ length: 12 }, (_, index) => ({ id: `history-${index}`, turn: 6, title: `Recorded event ${index}`, detail: "Confirmed in the playtester.", tone: "neutral" }));
+  await loadFixture(page, fixture(undefined, { userLife: 1, answeredCount: 52, history }));
+  await page.getByRole("button", { name: "Remove one life from you", exact: true }).click();
+  await page.getByRole("button", { name: "Review this run", exact: true }).click();
+  const review = page.getByRole("dialog", { name: "Run review", exact: true });
+  await expect(review.getByText("Recorded event 11", { exact: true })).toBeVisible();
+  await expect(review.getByText("52", { exact: true })).toBeVisible();
+  await expect(review).toContainText(`Ending cause: ${(await stored(page)).gameOver}`);
+  await page.getByRole("button", { name: "Close review", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "The goldfish game ended", exact: true })).toBeVisible();
+});

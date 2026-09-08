@@ -839,3 +839,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .turn-strip > small { font-size: 14px; }
 .defender-damage { min-width: 0; border: 1px solid var(--line); padding: 14px; margin-block: 18px; }
 .defender-damage > legend { font-weight: 700; padding-inline: 6px; }
+.matchup-presets { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 20px; }
+.matchup-presets > label { display: grid; gap: 8px; margin-block: 12px; }
+.matchup-presets ul { list-style: none; padding: 0; }
+.matchup-presets li { border-top: 1px solid var(--line); padding-block: 12px; }
+.matchup-presets li small { display: block; margin-block: 6px; }
+.matchup-presets li > div { display: flex; gap: 10px; }
+.matchup-presets li button { min-height: 44px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--control-line); border-radius: 6px; color: var(--ink); font: inherit; }
+.run-review { overflow-wrap: anywhere; line-height: 1.6; }
+.run-review > ul { padding-left: 20px; }
+.run-review > ul li { margin-bottom: 14px; }

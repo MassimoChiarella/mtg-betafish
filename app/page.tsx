@@ -63,6 +63,8 @@ import { expireThreat, payReservoir, reservoirDamage } from "./win-attempt";
 import { coreOutcome } from "./opponent-development";
 import { activeReminders, nextRoundAction, remindersAfterResolution } from "./round-flow";
 import { resolveMultiCombat } from "./multi-combat";
+import { MatchupPresets } from "./matchup-presets";
+import type { MatchupPreset } from "./presets";
 
 type OutgoingAttacker = {
   id: string;
@@ -471,13 +473,14 @@ export default function Home() {
   const attackerNameInput = useRef<HTMLInputElement>(null);
   const outgoingList = useRef<HTMLDivElement>(null);
 
-  const [activeModal, setActiveModal] = useState<"settings" | "library" | "combat" | "totals" | "reset" | "sessions" | "boards" | null>(null);
+  const [activeModal, setActiveModal] = useState<"settings" | "library" | "combat" | "totals" | "reset" | "sessions" | "boards" | "review" | null>(null);
   const [importedSession, setImportedSession] = useState<GameState | null>(null);
   const [sessionMessage, setSessionMessage] = useState("");
   const importRequest = useRef(0);
   const [settingsOpponents, setSettingsOpponents] = useState<Opponent[]>([]);
   const [settingsSeed, setSettingsSeed] = useState("");
   const [settingsMode, setSettingsMode] = useState<"quick" | "table">("quick");
+  const [presetDraft, setPresetDraft] = useState(false);
   const [settingsNameError, setSettingsNameError] = useState("");
   const [settingsTableError, setSettingsTableError] = useState("");
   const [correctionTarget, setCorrectionTarget] = useState<"user" | string>("user");
@@ -1400,12 +1403,21 @@ export default function Home() {
   }
 
   function openSettings() {
+    setPresetDraft(false);
     setSettingsOpponents(cloneOpponents(game.opponents));
     setSettingsSeed(game.seed);
     setSettingsMode(game.roundMode ?? "quick");
     setSettingsNameError("");
     setSettingsTableError("");
     setActiveModal("settings");
+  }
+
+  function loadMatchupPreset(preset: MatchupPreset) {
+    setSettingsOpponents(preset.opponents.map((opponent) => ({ ...opponent, life: 40, poisonCounters: 0, commanderDamage: {}, lossProtected: false, eliminated: false, development: "developing" })));
+    setSettingsSeed(preset.seed);
+    setSettingsMode(preset.roundMode);
+    setSettingsNameError(""); setSettingsTableError("");
+    setPresetDraft(true);
   }
 
   function configuredSettingsOpponents() {
@@ -1424,6 +1436,7 @@ export default function Home() {
   }
 
   function saveSettings() {
+    if (presetDraft) return;
     const opponents = configuredSettingsOpponents();
     if (!opponents) return;
     if (hasTrackedCommanderDamageFromRemovedOpponent(game, opponents)) {
@@ -1936,6 +1949,7 @@ export default function Home() {
 
           <section className="history" aria-labelledby="history-title">
             <div className="section-heading"><div><span className="eyebrow">This session</span><h2 id="history-title">Recent events</h2></div><button className="link-button" type="button" onClick={undo} disabled={!canUndo}>Undo</button></div>
+            <button className="text-button" type="button" onClick={() => { setSessionMessage(""); setActiveModal("review"); }}>Review run and retained history</button>
             <ol>
               {game.history.slice(0, 5).map((entry) => (
                 <li key={entry.id}><span className={`history-dot ${entry.tone}`} aria-hidden="true">{entry.tone === "success" ? "✓" : entry.tone === "warning" ? "!" : entry.tone === "damage" ? "−" : "·"}</span><div><strong>{entry.title}</strong><small>Round {entry.turn} · {entry.detail}</small></div></li>
@@ -1952,6 +1966,12 @@ export default function Home() {
         <span className={`save-status save-status-${saveStatus}`} role="status">{hydrated ? saveStatusText[saveStatus] : "Loading saved session…"}</span>
         <button className="footer-restart" type="button" aria-haspopup="dialog" onClick={() => setActiveModal("reset")}>Restart session</button>
       </footer>
+
+      {activeModal === "review" && <Modal title="Run review" subtitle="A summary of this run and every retained history entry. Export the session before starting again to keep a copy." onClose={() => setActiveModal(null)} wide>
+        {storageConflictNotice}
+        <div className="run-review"><p><strong>{game.gameOver ? "Ending cause" : "Run status"}:</strong> {game.gameOver ?? "Still in progress."}</p><div className="session-summary"><span><b>{game.turn}</b> rounds reached</span><span><b>{game.answeredCount}</b> threats/actions answered</span><span>Seed <b>{game.seed}</b> · {game.roundMode === "table" ? "seat-by-seat" : "quick"}</span></div><p>You: {game.userLife} life · {game.userPoisonCounters} poison · highest commander damage {maxUserCommanderDamage}</p><ul>{game.opponents.map((opponent) => <li key={opponent.id}><strong>{opponent.name}</strong> · {PROFILE_LABELS[opponent.profile]} · {bracketLabel(opponent.bracket)}<br />{opponent.life} life · {opponent.poisonCounters} poison · highest commander damage {highestCommanderDamage(opponent.commanderDamage)} · {opponent.eliminated ? "eliminated" : opponent.development ?? "developing"}</li>)}</ul><section className="history"><h3>Retained history</h3><p>The most recent {game.history.length} entries (up to 40), newest first. Older entries are not retained; the answered total covers the whole run.</p><ol>{game.history.map((entry) => <li key={entry.id}><span className={`history-dot ${entry.tone}`} aria-hidden="true">·</span><div><strong>{entry.title}</strong><small>Round {entry.turn} · {entry.detail}</small></div></li>)}</ol></section>{sessionMessage && <p role="status">{sessionMessage}</p>}</div>
+        <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => downloadSession()}>Export review session</button><button className="primary-button" type="button" onClick={() => setActiveModal(null)}>Close review</button></div>
+      </Modal>}
 
       {activeModal === "boards" && <Modal title="Record opponent development" subtitle="Use the actual battlefield after a wipe, engine removal or recovery. Rebuilding reduces attack odds and power and pauses new clocks; completed development actions restore pressure." onClose={() => setActiveModal(null)}>
         {storageConflictNotice}
@@ -2016,6 +2036,7 @@ export default function Home() {
               <button className="add-opponent" type="button" onClick={addSettingsOpponent} disabled={settingsOpponents.length >= 3}>+ Add opponent</button>
             </div>
             <div className="session-settings">
+              <MatchupPresets configuration={{ opponents: settingsOpponents, seed: settingsSeed.trim() || "GILDED-732", roundMode: settingsMode }} onLoad={loadMatchupPreset} />
               <label>Session seed<input value={settingsSeed} onChange={(event) => setSettingsSeed(event.target.value.toUpperCase())} maxLength={24} /></label>
               <label>New-run cadence<select value={settingsMode} onChange={(event) => setSettingsMode(event.target.value as "quick" | "table")}><option value="quick">Quick — one event per round</option><option value="table">Seat-by-seat — each opponent acts per round</option></select></label>
               <p>Cadence changes when starting a new run. Seat-by-seat actions cover the round; they are not literal Magic turns. Reactive counterspell scenarios still wait for a spell you can legally cast.</p>
@@ -2025,7 +2046,8 @@ export default function Home() {
               <p>Profiles are abstract matchup presets, not complete color-identity-checked decklists.</p>
             </div>
           </div>
-          <div className="modal-actions settings-actions"><button className="text-button" type="button" onClick={() => setActiveModal(null)}>Cancel</button><button className="secondary-button" type="button" onClick={saveSettings}>{game.responseStage === "resolved" ? "Apply and generate follow-up" : "Apply and reroll"}</button><button className="primary-button" type="button" onClick={startSeededRun}>Start new run with this seed <span aria-hidden="true">→</span></button></div>
+          {presetDraft && <p className="boundary-note">A preset is loaded as a new-run draft. Your current run remains unchanged until you start a new run.</p>}
+          <div className="modal-actions settings-actions"><button className="text-button" type="button" onClick={() => setActiveModal(null)}>Cancel</button><button className="secondary-button" type="button" disabled={presetDraft} onClick={saveSettings}>{game.responseStage === "resolved" ? "Apply and generate follow-up" : "Apply and reroll"}</button><button className="primary-button" type="button" onClick={startSeededRun}>Start new run with this seed <span aria-hidden="true">→</span></button></div>
         </Modal>
       )}
 
@@ -2112,6 +2134,7 @@ export default function Home() {
           {storageConflictNotice}
           <div className="session-summary"><span><b>{game.turn}</b> {game.turn === 1 ? "round" : "rounds"} reached</span><span><b>{game.answeredCount}</b> threats/actions answered</span><span><b>{game.userLife}</b> life · <b>{game.userPoisonCounters}</b> poison</span></div>
           {(userDefeated || tableDefeated) && <p className="terminal-guidance">If the recorded totals or an ongoing can’t-lose effect were missed, correct the affected player. Safe corrected totals can restore an eliminated opponent after a reload.</p>}
+          <button className="text-button" type="button" onClick={() => { setSessionMessage(""); setActiveModal("review"); }}>Review this run</button>
           <button className="text-button" type="button" onClick={() => { setImportedSession(null); setSessionMessage(""); setActiveModal("sessions"); }}>Save / restore</button>
           <div className="modal-actions">{canUndo && <button className="secondary-button" type="button" onClick={undo}>Undo last change</button>}{(userDefeated || tableDefeated) && <button className="secondary-button" type="button" onClick={() => openCorrection(terminalCorrectionTarget)}>Correct tracked totals</button>}{!tableDefeated && !userDefeated && <button className="secondary-button" type="button" onClick={continueAfterGameOver}>Continue anyway</button>}<button className="primary-button" type="button" onClick={resetSession}>Start a new run <span aria-hidden="true">→</span></button></div>
         </Modal>
