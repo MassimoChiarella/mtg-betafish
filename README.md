@@ -4,7 +4,7 @@
 
 The active roadmap and verification ledger are in [docs/development-plan.md](docs/development-plan.md).
 
-Run `npm ci`, then `npx playwright install chromium` once. `npm run check:release` runs lint, types, the production build, deterministic Node tests, and desktop/mobile Chromium gameplay tests against the static export. GitHub Actions runs the same release gate on every push and pull request and preserves failure traces. Windows sandboxed runners need permission to terminate their own browser/server child processes.
+Run `npm ci`, then `npx playwright install chromium` once. `npm run check:release` runs lint, types, the production build, deterministic Node tests, gzip bundle budgets, and desktop/mobile Chromium gameplay tests against the static export. GitHub Actions runs the same release gate on every push and pull request and preserves browser measurement attachments plus any failure traces. Windows sandboxed runners need permission to terminate their own browser/server child processes.
 
 Saved sessions use a separately versioned scenario catalog. **Save / restore** exports or imports validated JSON, recovers the previous valid autosave, and downloads preserved incompatible data. It is also available from game over. Files are limited to 1 MiB; importing never accepts a file's storage revision. A failed backup prevents replacement of the primary save.
 
@@ -29,19 +29,24 @@ Open the printed local URL, keep your deck playtester beside it, and resolve eac
 - event-specific legal response choices, repeatable counter exchanges, and scenario-specific empty outcomes
 - user and opponent life, poison counters, and commander damage per stable primary or Partner commander identity
 - ongoing can’t-lose effects plus an exact totals editor that can correct life, poison, each commander ledger, and post-reload eliminations
-- outgoing attackers and randomized block, removal, fog, or no-response outcomes
-- one active game-ending threat with a round countdown and visible owner context
-- true round-1/event-1 seeded runs, transactional undo, history, and a validated version-6 local draft with legacy migration and explicit cross-tab conflict choices
+- outgoing attackers assigned across multiple defenders, separate responses, and one atomic combat result/undo
+- one active threat countdown that becomes a playable, answerable win attempt when it expires
+- developing, established and rebuilding opponent boards that affect subsequent pressure
+- optional seat-by-seat rounds and source/recipient-aware reminders at actual upkeep or turn deadlines
+- true round-1/event-1 seeded runs, transactional undo, retained-history review, and a validated version-7 local draft with legacy migration and explicit cross-tab conflict choices
+- named device-local matchup presets with validated import/export; loading a preset changes only a new-run draft
 
-The app intentionally does not reproduce the battlefield or replace a Magic rules engine. Users resolve exact targets, blocks, prevention, replacement effects, and card interactions in their playtester, then record the result here. Outgoing combat records one defender per submission; reopen the form for split attacks or externally created extra combats. Commander damage remains attached to the displayed original commander identity when control changes outside the app.
+The app intentionally does not reproduce the battlefield or replace a Magic rules engine. Users resolve exact targets, blocks, prevention, replacement effects, and card interactions in their playtester, then record the result here. Outgoing combat records all selected defenders together; reopen the form only for another combat. Commander damage remains attached to the displayed original commander identity when control changes outside the app. Seat cadence represents actions across a round, not literal Magic turns or a priority engine; due effects are confirmed at their stated timing in the playtester.
 
 ## Scenario catalog
 
-The versioned catalog, bracket-specific deck cores, Commander bracket heuristics, and event templates live in `app/simulator.ts`. Update `CARD_LIBRARY`, `DECK_PROFILES`, templates, and the displayed catalog date together when refreshing emblematic cards or archetypes. Core cards can surface as deck-intel encounters without pretending the opponent cast them. Keyword explanations follow Wizards’ official glossary.
+The versioned catalog, bracket-specific deck cores, Commander bracket heuristics, and event templates live in `app/simulator.ts`. Update `CARD_LIBRARY`, `DECK_PROFILES`, templates, and the displayed catalog date together when refreshing emblematic cards or archetypes. All 90 profile/bracket core slots can surface as conditional spell, ability or land-play encounters. The user confirms prerequisites, costs and exact effects; sightings are possible, not guaranteed draws from hidden decklists. Keyword explanations follow Wizards’ official glossary.
 
 Bracket names and pacing guidance reflect the versioned Wizards Commander Brackets model represented by this release. The app’s exact counter, removal, combat, and defense probabilities are simulation heuristics rather than official rules. Profiles are abstract matchup presets, not full color-identity-validated 100-card decklists.
 
 ## Checks
+
+`npm run check:performance` measures the existing production export and a warmed 40-entry session. It fails on gzip size regressions, not machine-dependent timing. The browser suite also attaches a mobile 4× CPU-slowdown interaction report. See [docs/performance.md](docs/performance.md) for measurement scope, results and interpretation.
 
 ```bash
 npm run check

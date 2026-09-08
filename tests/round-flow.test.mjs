@@ -57,3 +57,11 @@ test("departed controllers cannot create delayed triggers and Ring reminders do 
   game.currentEvent.id = "second-activation";
   assert.equal(remindersAfterResolution(game).length, 1);
 });
+
+test("a departed Denial recipient has no draw obligation while the caster still draws", () => {
+  const game = fixture("counter-commander");
+  game.reminders = remindersAfterResolution(game, "two");
+  game.opponents[1].eliminated = true;
+  assert.deepEqual(activeReminders(game).map(({ recipientId }) => recipientId), ["one"]);
+  assert.equal(decodeGameState(game).reminders.length, 1);
+});

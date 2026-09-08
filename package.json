@@ -14,7 +14,8 @@
     "typecheck": "vinext typegen && tsc --noEmit",
     "check": "npm run lint && npm run typecheck && npm test",
     "test:browser": "playwright test",
-    "check:release": "npm run check && npm run test:browser"
+    "check:performance": "node scripts/performance.mjs",
+    "check:release": "npm run check && npm run check:performance && npm run test:browser"
   },
   "dependencies": {
     "@vercel/analytics": "2.0.1",

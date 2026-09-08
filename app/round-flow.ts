@@ -1,7 +1,8 @@
 import type { EffectReminder, GameState } from "./session.ts";
 
 export function activeReminders(state: Pick<GameState, "reminders" | "opponents">) {
-  return state.reminders?.filter((reminder) => reminder.due === "source-next-turn" || state.opponents.some((opponent) => opponent.id === reminder.sourceId && !opponent.eliminated));
+  const living = (id: string) => state.opponents.some((opponent) => opponent.id === id && !opponent.eliminated);
+  return state.reminders?.filter((reminder) => reminder.due === "source-next-turn" || (living(reminder.sourceId) && (reminder.recipientId === "user" || living(reminder.recipientId))));
 }
 
 // A cadence of table actions, not a replacement for Magic's priority/turn engine.

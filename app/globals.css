@@ -629,7 +629,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .modal { width: min(560px, calc(100% - 48px)); max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); margin: auto; padding: 0; overflow-y: auto; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 20px; background: var(--paper); color: var(--ink); box-shadow: 0 28px 80px rgba(25,27,34,.22); }
 .modal::backdrop { background: rgba(10,10,10,.68); backdrop-filter: blur(5px); }
 .modal-wide { width: min(920px, calc(100% - 48px)); }
-.modal-header { position: sticky; z-index: 2; top: 0; padding: 24px 26px 20px; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); background: rgba(255,254,250,.96); backdrop-filter: blur(10px); }
+.modal-header { position: sticky; z-index: 2; top: 0; padding: 24px 26px 20px; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); background: var(--paper); }
 .modal-header h2 { margin: 5px 0 0; font-family: var(--font-display); font-size: 30px; font-weight: 650; line-height: 1.08; letter-spacing: -.04em; }
 .modal-header p { max-width: 680px; margin: 9px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .modal-actions { padding: 18px 26px 22px; display: flex; justify-content: flex-end; gap: 9px; border-top: 1px solid var(--line); background: var(--surface); }
@@ -839,13 +839,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .turn-strip > small { font-size: 14px; }
 .defender-damage { min-width: 0; border: 1px solid var(--line); padding: 14px; margin-block: 18px; }
 .defender-damage > legend { font-weight: 700; padding-inline: 6px; }
-.matchup-presets { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 20px; }
+.matchup-presets { border-bottom: 1px solid #53545e; padding-bottom: 20px; margin-bottom: 20px; color: white; }
+.matchup-presets > .secondary-button { min-height: 44px; background: var(--paper); color: var(--ink); }
 .matchup-presets > label { display: grid; gap: 8px; margin-block: 12px; }
 .matchup-presets ul { list-style: none; padding: 0; }
 .matchup-presets li { border-top: 1px solid var(--line); padding-block: 12px; }
 .matchup-presets li small { display: block; margin-block: 6px; }
 .matchup-presets li > div { display: flex; gap: 10px; }
 .matchup-presets li button { min-height: 44px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--control-line); border-radius: 6px; color: var(--ink); font: inherit; }
-.run-review { overflow-wrap: anywhere; line-height: 1.6; }
+.run-review { padding: 20px 26px; overflow-wrap: anywhere; line-height: 1.6; }
 .run-review > ul { padding-left: 20px; }
 .run-review > ul li { margin-bottom: 14px; }
