@@ -16,7 +16,7 @@ export function payReservoir(state: GameState): Partial<GameState> {
   const life = source.life - 50;
   const eliminated = Boolean(evaluateTrackedLoss({ ...source, life }, source.lossProtected));
   const opponents = state.opponents.map((opponent) => opponent.id === source.id ? { ...opponent, life, eliminated } : opponent);
-  return { opponents, reservoirPayment: state.currentEvent.id, responseStage: eliminated ? "resolved" : "choose", resolution: eliminated ? `${source.name} paid 50 life and left the game; their activation was removed before responses.` : `${source.name} paid 50 life. The activation is now on the stack.`, gameOver: opponents.every((opponent) => opponent.eliminated) ? "Every simulated opponent has left the game." : state.gameOver };
+  return { opponents, activeThreat: eliminated && state.activeThreat?.ownerId === source.id ? null : state.activeThreat, reservoirPayment: state.currentEvent.id, responseStage: eliminated ? "resolved" : "choose", resolution: eliminated ? `${source.name} paid 50 life and left the game; their activation was removed before responses.` : `${source.name} paid 50 life. The activation is now on the stack.`, gameOver: opponents.every((opponent) => opponent.eliminated) ? "Every simulated opponent has left the game." : state.gameOver };
 }
 
 export function reservoirDamage(state: GameState, target: string, damage: number): Partial<GameState> {
@@ -30,5 +30,5 @@ export function reservoirDamage(state: GameState, target: string, damage: number
     return { ...opponent, life, eliminated: opponent.eliminated || Boolean(evaluateTrackedLoss({ ...opponent, life }, opponent.lossProtected)) };
   });
   const userLost = evaluateTrackedLoss({ life: userLife, poisonCounters: state.userPoisonCounters, commanderDamage: state.userCommanderDamage }, state.userLossProtected);
-  return { userLife, opponents, gameOver: userLost ? "You lost to Aetherflux Reservoir’s activation." : opponents.every((opponent) => opponent.eliminated) ? "Every simulated opponent has left the game." : null };
+  return { userLife, opponents, activeThreat: opponents.some((opponent) => opponent.id === state.activeThreat?.ownerId && opponent.eliminated) ? null : state.activeThreat, gameOver: userLost ? "You lost to Aetherflux Reservoir’s activation." : opponents.every((opponent) => opponent.eliminated) ? "Every simulated opponent has left the game." : null };
 }

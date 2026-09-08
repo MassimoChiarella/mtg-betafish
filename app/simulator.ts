@@ -8,6 +8,7 @@ export type EventKind = "targeted" | "wipe" | "counter" | "disruption" | "attack
 export type Keyword = "Flying" | "Reach" | "Trample" | "Menace" | "Vigilance" | "Deathtouch" | "First strike" | "Double strike" | "Haste" | "Lifelink" | "Infect";
 export type CommanderSlot = "primary" | "partner";
 export type CommanderBracket = 1 | 2 | 3 | 4 | 5;
+export type DevelopmentState = "developing" | "established" | "rebuilding";
 export type ResponseOption = "counter" | "protect" | "redirect" | "custom";
 
 export const opponentCommanderKey = (opponentId: string, slot: CommanderSlot = "primary") => slot === "primary"
@@ -26,6 +27,7 @@ export type Opponent = {
   commanderDamage: Record<string, number>;
   lossProtected: boolean;
   eliminated: boolean;
+  development?: DevelopmentState;
 };
 
 export type Attacker = {
@@ -310,7 +312,8 @@ export function gameChangerIdentity(card: string) {
   return card === "Thassa’s Oracle line" ? "Thassa’s Oracle" : card;
 }
 
-// These are reached only by an expiring clock, never by a random event roll.
+// Not ordinary weighted templates: clocks use these, and Reservoir's core card
+// uses the same activation workflow so its cost cannot be bypassed.
 export const WIN_ATTEMPTS: Array<Pick<SimEvent, "kind" | "title" | "prompt" | "card" | "responseOptions"> & { id: string; emptyOutcome?: string }> = [
   { id: "oracle-attempt", kind: "disruption", title: "Oracle’s trigger is on the stack.", prompt: "The creature spell is not the win. Respond to the triggered ability or the library-changing line; on resolution, compare devotion to blue with cards in its controller’s library and check whether that player can win.", card: "Thassa’s Oracle", responseOptions: ["custom"] },
   { id: "reservoir-attempt", kind: "disruption", title: "Reservoir is ready to fire.", prompt: "The controller must pay 50 life before anyone responds. If they leave the game after paying, their ability is removed. Otherwise resolve interaction, then confirm damage to its final target.", card: "Aetherflux Reservoir", responseOptions: ["custom"] },
@@ -321,6 +324,49 @@ export const WIN_ATTEMPTS: Array<Pick<SimEvent, "kind" | "title" | "prompt" | "c
 export function isWinAttempt(event: Pick<SimEvent, "templateId">) {
   return WIN_ATTEMPTS.some((attempt) => attempt.id === event.templateId);
 }
+
+const CORE_DETAILS: Record<string, ["spell" | "ability" | "land", string]> = {
+  "Scavenging Ooze": ["ability", "Activate targeting a card in your graveyard. Exile it; if it was a creature card, Ooze’s controller gains 1 life and puts a +1/+1 counter on Ooze."],
+  "Beast Within": ["spell", "Target your most valuable nonland permanent. Destroy it; its controller creates a 3/3 Beast even if a legal indestructible target survives."],
+  "Aura Shards": ["ability", "A creature entered under the source’s control. Its Aura Shards trigger targets an artifact or enchantment you control for destruction."],
+  "The One Ring": ["ability", "Tap a Ring with one burden counter: add its second counter, then draw two. At its controller’s upkeep, its separate trigger loses life equal to its burden counters; keep that obligation in the playtester."],
+  "Orcish Bowmasters": ["ability", "Its entry trigger deals 1 damage to its chosen target, then amasses Orcs 1. Confirm the final target and damage; removing Bowmasters does not remove the trigger."],
+  "Dismiss": ["spell", "Target a spell you actually cast. Counter it and, if Dismiss resolves, its controller draws a card."],
+  "Arcane Denial": ["spell", "Target your spell. On resolution counter it; at the next turn’s upkeep its controller may draw up to two cards and Denial’s controller draws one."],
+  "Swords to Plowshares": ["spell", "Exile the selected creature. Its controller gains life equal to its last-known power (minimum zero). Confirm the controller and life gain in the final totals."],
+  "Fierce Guardianship": ["spell", "Target a noncreature spell you cast. The free alternate cost requires its caster to control a commander; otherwise pay its mana cost."],
+  "Force of Will": ["spell", "Target your spell. The alternate cost exiles a blue card from hand and pays 1 life before responses. That cost remains paid if Force is answered; a caster who leaves the game has their spell removed."],
+  "Chatterstorm": ["spell", "Cast after two earlier spells this turn. Resolve its storm trigger, original and two copies separately: up to three 1/1 Squirrels. Countering the original does not counter the copies."],
+  "Secure the Wastes": ["spell", "Cast for X = 3. If it resolves, create three 1/1 white Warrior tokens; these can contribute to future board pressure."],
+  "Adeline, Resplendent Cathar": ["ability", "During an actual attack, its trigger creates a tapped-and-attacking 1/1 Human toward each opponent. Include the token attacking you in that same combat; entering attacking does not itself trigger attack abilities."],
+  "Craterhoof Behemoth": ["ability", "Resolve the entry trigger: creatures get trample and +X/+X, where X is the creature count at resolution. Record the actual resulting combat separately; this trigger does not itself win."],
+  "Najeela, the Blade-Blossom": ["ability", "A Warrior was declared attacking. Its trigger may create a tapped-and-attacking Warrior in this combat. A token entering attacking does not trigger another token; extra combat requires the separate WUBRG activation."],
+  "Hero’s Blade": ["ability", "A legendary creature entered under its controller’s control. The Blade’s trigger may attach it to that creature, granting +3/+2."],
+  "All That Glitters": ["spell", "Cast this Aura on a legal creature. Once attached, count its controller’s artifacts and enchantments, including this Aura, for the +1/+1 bonuses."],
+  "Sword of Feast and Famine": ["ability", "Only after its equipped creature actually hits you with combat damage: you discard a card and its controller untaps their lands. Without that hit, this encounter is not viable."],
+  "Enlightened Tutor": ["spell", "Search for an artifact or enchantment, reveal it, shuffle and put it on top. Finding the card is not casting it or automatically completing a combo."],
+  "Godo, Bandit Warlord": ["ability", "Its entry trigger may find Helm of the Host and put it onto the battlefield. It is not automatically equipped; any later loop requires the actual legal setup."],
+  "Efficient Construction": ["ability", "An artifact spell was cast, triggering a 1/1 flying Thopter. Resolve the trigger separately from that artifact spell."],
+  "Crackle with Power": ["spell", "Cast for X = 2, targeting you for 10 damage (up to two legal targets). Apply actual damage after prevention, replacement and interaction."],
+  "Aetherflux Reservoir": ["ability", "Activate only with at least 50 life. Pay 50 before responses; if the controller leaves, remove their ability. Otherwise it deals 50 damage to its final legal target. Enter all final life changes below, even if the activation was answered."],
+  "Walking Ballista": ["ability", "Remove a +1/+1 counter as a cost, then deal 1 damage to its final target. Removing Ballista does not remove the activated ability; its paid counter is not refunded."],
+  "Pact of Negation": ["spell", "Counter your spell. If Pact resolves, its controller must pay 3UU at their next upkeep or lose the game; retain that obligation in the playtester."],
+  "Gravedigger": ["ability", "Its entry trigger targets a creature card in the source’s graveyard to return to their hand, not directly to the battlefield."],
+  "Victimize": ["spell", "Target two creature cards in its caster’s graveyard. On resolution they sacrifice a creature; if they do, return the applicable targeted cards tapped. The sacrifice is not a casting cost."],
+  "Living Death": ["spell", "Each player exiles creature cards from their graveyard, sacrifices their creatures, then returns the exiled cards. Record each actual resulting board; a graveyard deck may improve rather than rebuild."],
+  "Reanimate": ["spell", "Target a creature card in a graveyard. On resolution return it under the caster’s control, then they lose life equal to its mana value; that life loss is not a casting cost."],
+  "Brain Freeze": ["spell", "Cast after two earlier spells. Original plus two storm copies may mill nine cards; resolve each copy and target separately. An empty library alone does not cause an immediate loss."],
+  "Ancient Tomb": ["land", "Play this land only if the source has a land play available. A land play does not use the stack. Its later mana ability deals 2 damage to its controller when activated."],
+  "Gaea’s Cradle": ["land", "Play this land only if a land play is available. A land play does not use the stack; its later mana ability counts creatures its controller controls."],
+};
+
+export const CORE_ENCOUNTERS = Object.entries(DECK_PROFILES).flatMap(([profile, deck]) => Object.entries(deck.coreCards).flatMap(([bracket, cards]) => cards.map((card) => {
+  const [objectType, detail] = CORE_DETAILS[card] ?? ["spell", `Cast ${card} only with the required mana, costs and legal targets. Read its card preview and resolve its exact Oracle text and responses in the playtester.`];
+  return { id: `core-${profile}-${bracket}-${card.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, kind: "disruption" as const, profile: profile as ProfileId, bracket: Number(bracket) as CommanderBracket, card, objectType, title: `${card}: ${objectType === "land" ? "a land play" : objectType === "ability" ? "an ability encounter" : "a spell encounter"}.`, prompt: `${detail} Confirm prerequisites before proceeding; record costs and final effects once, after interaction.`, responseOptions: ["custom"] as ResponseOption[], emptyOutcome: "The prerequisites or legal targets were not present." };
+})));
+
+export const coreEncounter = (templateId: string) => CORE_ENCOUNTERS.find((event) => event.id === templateId);
+export const nextDevelopment = (state: DevelopmentState = "developing"): DevelopmentState => state === "rebuilding" ? "developing" : "established";
 
 export function winAttemptEvent(threat: Threat, source: Opponent, turn: number, counter: number, seed: string): SimEvent {
   const original = threat.templateId ?? EVENT_TEMPLATES.find((template) => template.kind === "threat" && template.title === threat.title)?.id;
@@ -445,7 +491,7 @@ function attackBand(turn: number) {
 }
 
 /** Returns app-tuned relative weights, not probabilities; weighted selection normalizes them. */
-export function eventKindWeights(input: { turn: number; profile: ProfileId; bracket: CommanderBracket; activeThreat: boolean; combatResolvedTurn?: number | null }): Record<EventKind, number> {
+export function eventKindWeights(input: { turn: number; profile: ProfileId; bracket: CommanderBracket; activeThreat: boolean; combatResolvedTurn?: number | null; development?: DevelopmentState }): Record<EventKind, number> {
   const bracket = normalizeCommanderBracket(input.bracket);
   const bracketRules = COMMANDER_BRACKETS[bracket];
   const profile = DECK_PROFILES[input.profile];
@@ -458,9 +504,9 @@ export function eventKindWeights(input: { turn: number; profile: ProfileId; brac
     wipe: eligibleKinds.has("wipe") ? profile.events.wipe * interactionScale : 0,
     counter: eligibleKinds.has("counter") ? profile.events.counter * interactionScale : 0,
     disruption: eligibleKinds.has("disruption") ? profile.events.disruption * bracketRules.pace : 0,
-    attack: input.combatResolvedTurn === input.turn ? 0 : attackBand(effectiveTurn).chance * profile.combat * (bracketRules.pace ** 3) * 35,
-    threat: !input.activeThreat && input.turn >= bracketRules.earliestThreatTurn && eligibleKinds.has("threat") ? profile.events.threat * bracketRules.pace : 0,
-    development: ({ 1: 70, 2: 55, 3: 40, 4: 25, 5: 10 } as Record<CommanderBracket, number>)[bracket],
+    attack: input.combatResolvedTurn === input.turn ? 0 : attackBand(effectiveTurn).chance * profile.combat * (bracketRules.pace ** 3) * 35 * (input.development === "rebuilding" ? .3 : input.development === "developing" ? .75 : 1),
+    threat: input.development !== "rebuilding" && !input.activeThreat && input.turn >= bracketRules.earliestThreatTurn && eligibleKinds.has("threat") ? profile.events.threat * bracketRules.pace : 0,
+    development: ({ 1: 70, 2: 55, 3: 40, 4: 25, 5: 10 } as Record<CommanderBracket, number>)[bracket] + (input.development === "rebuilding" ? 60 : 0),
   };
 }
 
@@ -566,11 +612,20 @@ export function generateEvent(input: {
   const effectiveTurn = Math.max(1, turn + bracketRules.turnOffset);
 
   const isEligible = (template: EventTemplate) => isTemplateEligible(template, source.profile, bracket, effectiveTurn);
-  const eventWeights = eventKindWeights({ turn, profile: source.profile, bracket, activeThreat, combatResolvedTurn });
+  const corePool = CORE_ENCOUNTERS.filter((event) => event.profile === source.profile && event.bracket === bracket && !recentTemplateIds.includes(event.id)
+    && (!["Aetherflux Reservoir", "Craterhoof Behemoth", "Biorhythm"].includes(event.card) || turn >= bracketRules.earliestThreatTurn));
+  // ponytail: core cards are conditional tabletop encounters, not a hidden 99-card deck or mana engine.
+  const coreRoll = rngFor(`${seed}:${turn}:${counter}:core`);
+  if (corePool.length && coreRoll() < .18) {
+    const core = corePool[intBetween(coreRoll, 0, corePool.length - 1)];
+    if (core.card === "Aetherflux Reservoir") return winAttemptEvent({ id: eventId, ownerId: source.id, title: core.title, description: core.prompt, remaining: 1, delayed: false, templateId: "artifact-clock" }, source, turn, counter, seed);
+    return { id: eventId, templateId: core.id, kind: core.kind, sourceId: source.id, sourceName: source.name, title: core.title, prompt: core.prompt, card: core.card, tags: ["Core-card encounter", core.objectType === "ability" ? "Activated / triggered ability" : core.objectType, `B${bracket} ${bracketRules.label}`], responseOptions: [...core.responseOptions], emptyOutcome: core.emptyOutcome };
+  }
+  const eventWeights = eventKindWeights({ turn, profile: source.profile, bracket, activeThreat, combatResolvedTurn, development: source.development });
   const kind = weightedPick(random, eventWeights);
 
   if (kind === "attack") {
-    const attackers = generateCombatDeclaration(random, effectiveTurn, source, bracketRules.pace, eventId);
+    const attackers = generateCombatDeclaration(random, effectiveTurn, source, bracketRules.pace * (source.development === "rebuilding" ? .4 : source.development === "developing" ? .8 : 1), eventId);
     return {
       id: eventId,
       templateId: "scaled-attack",

@@ -227,7 +227,7 @@ test("local persistence uses revision envelopes, raw legacy reads, and explicit 
   assert.equal((sourceSection(pageSource, "function loadSavedConflict()", "// Move focus only").match(/encounterHeading\.current\?\.focus\(\)/g) ?? []).length, 2);
   assert.match(pageSource, /const storageConflictNotice = storageConflict \?/);
   assert.match(pageSource, /\{!hasOpenDialog && storageConflictNotice\}/);
-  assert.equal((pageSource.match(/\{storageConflictNotice\}/g) ?? []).length, 8);
+  assert.equal((pageSource.match(/\{storageConflictNotice\}/g) ?? []).length, 9);
   assert.match(pageSource, />Load saved version<\/button>/);
   assert.match(pageSource, />Keep this tab<\/button>/);
   assert.match(startRun, /createInitialGame\(seed, opponents\.map/);

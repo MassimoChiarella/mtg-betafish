@@ -3,6 +3,7 @@ import {
   DECK_PROFILES,
   EVENT_TEMPLATES,
   WIN_ATTEMPTS,
+  coreEncounter,
   KEYWORD_DEFINITIONS,
   developmentEvent,
   evaluateTrackedLoss,
@@ -143,7 +144,8 @@ function readOpponent(value: unknown, version: number): Opponent | undefined {
     || !PROFILES.has(value.profile)
     || typeof value.life !== "number"
     || !Number.isSafeInteger(value.life)
-    || typeof value.eliminated !== "boolean") return undefined;
+    || typeof value.eliminated !== "boolean"
+    || (value.development !== undefined && !["developing", "established", "rebuilding"].includes(value.development as string))) return undefined;
 
   const bracket = value.bracket === undefined && version === 1 ? 3 : value.bracket;
   const commanderDamage = readDamageLedger(value.commanderDamage);
@@ -174,6 +176,7 @@ function readOpponent(value: unknown, version: number): Opponent | undefined {
     poisonCounters,
     lossProtected,
     eliminated: value.eliminated || (version < 6 && hasUnprotectedLoss),
+    ...(value.development !== undefined ? { development: value.development as Opponent["development"] } : {}),
   };
 }
 
@@ -271,7 +274,8 @@ function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: nu
   if (value.emptyOutcome !== undefined && typeof value.emptyOutcome !== "string") return undefined;
   if (version >= 5 && !responseOptions) return undefined;
 
-  const template = [...EVENT_TEMPLATES, ...WIN_ATTEMPTS].find((candidate) => candidate.id === value.templateId);
+  const template = [...EVENT_TEMPLATES, ...WIN_ATTEMPTS].find((candidate) => candidate.id === value.templateId) ?? coreEncounter(value.templateId);
+  if (value.templateId.startsWith("core-") && !template) return undefined;
   const dynamicMetadata = template ? null
     : value.kind === "signature" && value.templateId === SIGNATURE_USE_TEMPLATE_ID ? LEGACY_SIGNATURE_METADATA
       : responseMetadataForEvent(value.templateId, value.kind as EventKind);
@@ -418,6 +422,8 @@ export function decodeGameState(raw: unknown): GameState | null {
     }
 
     const eventSource = opponents.find((opponent) => opponent.id === currentEvent.sourceId);
+    const core = coreEncounter(currentEvent.templateId);
+    if (core && (core.profile !== eventSource?.profile || core.bracket !== eventSource.bracket)) return null;
     let responseStage = raw.responseStage as ResponseStage;
     let resolution = raw.resolution;
     let counterExchange = version < 5

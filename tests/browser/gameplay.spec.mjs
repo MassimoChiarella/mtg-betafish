@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { fixture, loadFixture, stored } from "./fixtures.mjs";
+import { CORE_ENCOUNTERS } from "../../app/simulator.ts";
 
 test.beforeEach(async ({ page }) => {
   await page.route("https://api.scryfall.com/**", (route) => route.abort());
@@ -123,4 +124,28 @@ test("a defended Craterhoof attempt is not an automatic loss", async ({ page }) 
   await page.getByRole("button", { name: "Fog / stop combat" }).click();
   await expect.poll(async () => (await stored(page)).responseStage).toBe("resolved");
   expect((await stored(page)).gameOver).toBeNull();
+});
+
+test("core-card results persist development and final totals", async ({ page }) => {
+  const game = fixture(); const core = CORE_ENCOUNTERS.find((card) => card.card === "Scavenging Ooze");
+  game.opponents[0].profile = core.profile; game.opponents[0].bracket = core.bracket;
+  game.currentEvent = { ...game.currentEvent, ...core, templateId: core.id };
+  await loadFixture(page, game);
+  await page.getByRole("spinbutton", { name: "One’s final life", exact: true }).fill("41");
+  await page.getByRole("checkbox", { name: /I checked prerequisites/ }).check();
+  await page.getByRole("button", { name: "Record core-card outcome" }).click();
+  await expect.poll(async () => (await stored(page)).opponents[0].development).toBe("established");
+  await page.reload();
+  expect((await stored(page)).opponents[0].life).toBe(41);
+});
+
+test("wipe setbacks are explicitly chosen and survive reload", async ({ page }) => {
+  await loadFixture(page, fixture("destroy-wipe"));
+  await page.getByRole("button", { name: "No response", exact: true }).click();
+  await page.getByRole("button", { name: "Record affected boards" }).click();
+  await page.getByRole("combobox", { name: "One’s board", exact: true }).selectOption("rebuilding");
+  await page.getByRole("button", { name: "Save board development" }).click();
+  await expect.poll(async () => (await stored(page)).opponents[0].development).toBe("rebuilding");
+  await page.reload();
+  await expect(page.getByRole("button", { name: "rebuilding · update board", exact: true })).toBeVisible();
 });

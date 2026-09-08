@@ -7,6 +7,8 @@ import {
   CARD_LIBRARY_UPDATED,
   COMMANDER_BRACKETS,
   counterBacks,
+  coreEncounter,
+  nextDevelopment,
   DECK_PROFILES,
   evaluateTrackedLoss,
   GAME_CHANGER_CARDS,
@@ -25,6 +27,7 @@ import {
   type CommanderBracket,
   type CommanderSlot,
   type DefenseResult,
+  type DevelopmentState,
   type GlossaryKey,
   type Keyword,
   type Opponent,
@@ -57,6 +60,7 @@ import {
 import { scryfallImageUrl, scryfallReferenceUrl } from "./scryfall";
 import { spellOutcome, type SpellResult } from "./spell-outcome";
 import { expireThreat, payReservoir, reservoirDamage } from "./win-attempt";
+import { coreOutcome } from "./opponent-development";
 
 type OutgoingAttacker = {
   id: string;
@@ -90,6 +94,7 @@ function cloneOpponents(opponents: readonly Opponent[]): Opponent[] {
     poisonCounters: nonnegativeSafeInteger(opponent.poisonCounters) ?? 0,
     commanderDamage: { ...opponent.commanderDamage },
     lossProtected: opponent.lossProtected ?? false,
+    development: opponent.development ?? "developing",
   }));
 }
 
@@ -458,7 +463,7 @@ export default function Home() {
   const attackerNameInput = useRef<HTMLInputElement>(null);
   const outgoingList = useRef<HTMLDivElement>(null);
 
-  const [activeModal, setActiveModal] = useState<"settings" | "library" | "combat" | "totals" | "reset" | "sessions" | null>(null);
+  const [activeModal, setActiveModal] = useState<"settings" | "library" | "combat" | "totals" | "reset" | "sessions" | "boards" | null>(null);
   const [importedSession, setImportedSession] = useState<GameState | null>(null);
   const [sessionMessage, setSessionMessage] = useState("");
   const importRequest = useRef(0);
@@ -838,7 +843,7 @@ export default function Home() {
     if (event.kind === "attack") return;
     if (event.kind === "targeted") { setPendingOutcome({ answered: false }); return; }
     if (event.kind === "development") {
-      resolveEvent("Table developed", `${event.sourceName} advances their game plan. Nothing new targets you.`, "neutral");
+      resolveEvent("Table developed", `${event.sourceName} advances their game plan. Nothing new targets you.`, "neutral", (previous) => ({ opponents: previous.opponents.map((opponent) => opponent.id === event.sourceId ? { ...opponent, development: nextDevelopment(opponent.development) } : opponent) }));
       return;
     }
     if (event.kind === "threat" && event.threat) {
@@ -1172,6 +1177,31 @@ export default function Home() {
     } catch (error) { setAttemptError(error instanceof Error ? error.message : "Unable to pay this cost."); }
   }
 
+  function submitCoreOutcome(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const result = String(data.get("core-result"));
+    try {
+      const patch = coreOutcome(game, result, Number(data.get("core-source-life")), Number(data.get("core-user-life")), data.get("core-development") as DevelopmentState);
+      const detail = result === "not-viable" ? `${game.currentEvent.card}: prerequisites were not present; no action occurred.` : `${game.currentEvent.card} ${result === "answered" ? "was answered" : "resolved"}. Costs, exact effects and final totals were confirmed in the playtester.${result === "resolved" ? ` ${game.currentEvent.sourceName} is ${data.get("core-development")}.` : ""}`;
+      resolveEvent(result === "answered" ? "Core-card action answered" : "Core-card outcome", detail, result === "answered" ? "success" : "neutral", patch, result === "answered");
+      setOutcomeError("");
+    } catch (error) { setOutcomeError(error instanceof Error ? error.message : "Check the outcome."); }
+  }
+
+  function recordBoards(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    commit((previous) => {
+      const opponents = previous.opponents.map((opponent) => {
+        const development = data.get(`board-${opponent.id}`);
+        return !opponent.eliminated && ["developing", "established", "rebuilding"].includes(String(development)) ? { ...opponent, development: development as DevelopmentState } : opponent;
+      });
+      return { ...previous, opponents, history: [historyEntry(previous, "Battlefield development updated", opponents.filter((opponent) => !opponent.eliminated).map((opponent) => `${opponent.name}: ${opponent.development ?? "developing"}`).join("; "), "neutral"), ...previous.history].slice(0, 40) };
+    });
+    setActiveModal(null);
+  }
+
   function submitReservoirDamage(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -1426,6 +1456,7 @@ export default function Home() {
       commanderDamage: {},
       lossProtected: false,
       eliminated: false,
+      development: "developing",
     })));
     undoStack.current = [];
     gameRef.current = next;
@@ -1736,7 +1767,18 @@ export default function Home() {
                 </div>
               )}
 
-              {game.responseStage === "prompt" && game.currentEvent.kind !== "attack" && game.currentEvent.kind !== "development" && !isWinAttempt(game.currentEvent) && (
+              {coreEncounter(game.currentEvent.templateId) && game.responseStage !== "resolved" && <form className="response-box correction-form" onSubmit={submitCoreOutcome}>
+                <span className="eyebrow">Complete this card encounter in your playtester</span>
+                <p>{coreEncounter(game.currentEvent.templateId)?.objectType === "ability" ? "This is an ability: an ordinary counterspell cannot counter it. Removing its source usually does not remove the ability." : coreEncounter(game.currentEvent.templateId)?.objectType === "land" ? "Playing a land does not use the stack and cannot be countered." : "Resolve the spell and any distinct triggers or copies separately."} Record paid costs even when the action is answered.</p>
+                <label>Core-card result<select name="core-result"><option value="resolved">Resolved — effects applied</option><option value="answered">Answered by legal interaction</option><option value="not-viable">No legal opportunity / prerequisites absent</option></select></label>
+                <div className="correction-primary-fields"><label>{game.currentEvent.sourceName}’s final life<input name="core-source-life" type="number" step="1" min={Number.MIN_SAFE_INTEGER} max={Number.MAX_SAFE_INTEGER} defaultValue={sourceOpponent?.life} required /></label><label>Your final life<input name="core-user-life" type="number" step="1" min={Number.MIN_SAFE_INTEGER} max={Number.MAX_SAFE_INTEGER} defaultValue={game.userLife} required /></label></div>
+                <label>Source board after resolution<select name="core-development" defaultValue={nextDevelopment(sourceOpponent?.development)}><option value="developing">Developing</option><option value="established">Established</option><option value="rebuilding">Rebuilding</option></select></label>
+                <label className="check-label"><input type="checkbox" required />I checked prerequisites and applied the actual costs, effects and interaction in the playtester.</label>
+                {outcomeError && <p role="alert" className="inline-error">{outcomeError}</p>}
+                <button type="submit" className="primary-button">Record core-card outcome</button>
+              </form>}
+
+              {game.responseStage === "prompt" && game.currentEvent.kind !== "attack" && game.currentEvent.kind !== "development" && !isWinAttempt(game.currentEvent) && !coreEncounter(game.currentEvent.templateId) && (
                 <div className="response-box">
                   <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>Do you have a response?</span>{game.currentEvent.kind !== "threat" && (game.currentEvent.kind === "targeted" || game.currentEvent.kind === "counter") && <GlossaryHelp terms={["Legal target"]} />}</div>
                   <div className="response-actions">
@@ -1756,7 +1798,7 @@ export default function Home() {
                 </div>
               )}
 
-              {game.responseStage === "choose" && !isWinAttempt(game.currentEvent) && (
+              {game.responseStage === "choose" && !isWinAttempt(game.currentEvent) && !coreEncounter(game.currentEvent.templateId) && (
                 <div className="response-box response-choice-box">
                   <div className="response-heading"><span className="eyebrow" ref={responseStep} tabIndex={-1}>Choose the line you used</span><GlossaryHelp terms={["Counter", "Hexproof", "Indestructible", "Phase out", "Legal target", "Sacrifice", "Blink", "Bounce"]} /></div>
                   <div className="choice-grid">{game.currentEvent.responseOptions.map((option) => <button type="button" onClick={() => answerEvent(option)} key={option}><strong>{RESPONSE_PRESENTATION[option].title}</strong><small>{RESPONSE_PRESENTATION[option].detail}</small></button>)}</div>
@@ -1806,6 +1848,7 @@ export default function Home() {
             {game.responseStage === "resolved" && (
               <div className="resolved-box"><span className="resolved-mark" aria-hidden="true">✓</span><div><span className="eyebrow" ref={responseStep} tabIndex={-1}>Recorded</span><strong>{game.resolution}</strong></div></div>
             )}
+            {game.responseStage === "resolved" && (game.currentEvent.kind === "wipe" || game.currentEvent.templateId === "artifact-sweep") && <div className="response-box"><p>Did this remove an opponent’s board or engine? Record the affected boards. Protected boards and Living Death may leave different results.</p><button className="secondary-button" type="button" onClick={() => setActiveModal("boards")}>Record affected boards</button></div>}
           </article>
 
           <div className="next-action">
@@ -1833,7 +1876,7 @@ export default function Home() {
                   <button type="button" onClick={() => adjustLife(opponent.id, 1)} aria-label={`Add one life to ${opponent.name}`}>+</button>
                 </div>
                 <div className="poison-control"><button type="button" onClick={() => adjustPoison(opponent.id, -1)} aria-label={`Remove one poison counter from ${opponent.name}`}>−</button><span aria-live="polite" aria-atomic="true">Poison {opponent.poisonCounters}/10</span><button type="button" onClick={() => adjustPoison(opponent.id, 1)} aria-label={`Add one poison counter to ${opponent.name}`}>+</button></div>
-                <div className="tracked-actions"><button type="button" onClick={() => openCorrection(opponent.id)}>Correct totals</button>{opponent.lossProtected && <button type="button" onClick={() => endLossProtection(opponent.id)}>End effect</button>}</div>
+                <div className="tracked-actions"><button type="button" onClick={() => openCorrection(opponent.id)}>Correct totals</button>{!opponent.eliminated && <button type="button" onClick={() => setActiveModal("boards")}>{opponent.development ?? "developing"} · update board</button>}{opponent.lossProtected && <button type="button" onClick={() => endLossProtection(opponent.id)}>End effect</button>}</div>
               </article>
             ))}
           </div>
@@ -1890,6 +1933,11 @@ export default function Home() {
         <span className={`save-status save-status-${saveStatus}`} role="status">{hydrated ? saveStatusText[saveStatus] : "Loading saved session…"}</span>
         <button className="footer-restart" type="button" aria-haspopup="dialog" onClick={() => setActiveModal("reset")}>Restart session</button>
       </footer>
+
+      {activeModal === "boards" && <Modal title="Record opponent development" subtitle="Use the actual battlefield after a wipe, engine removal or recovery. Rebuilding reduces attack odds and power and pauses new clocks; completed development actions restore pressure." onClose={() => setActiveModal(null)}>
+        {storageConflictNotice}
+        <form className="correction-form" onSubmit={recordBoards}>{livingOpponents.map((opponent) => <label key={opponent.id}>{opponent.name}’s board<select name={`board-${opponent.id}`} defaultValue={opponent.development ?? "developing"}><option value="developing">Developing</option><option value="established">Established</option><option value="rebuilding">Rebuilding</option></select></label>)}<button className="primary-button" type="submit">Save board development</button></form>
+      </Modal>}
 
       {activeModal === "sessions" && (
         <Modal title="Save and restore sessions" subtitle="Files and backups stay on your device. Importing replaces this run after you confirm; Undo restores it." onClose={() => setActiveModal(null)}>

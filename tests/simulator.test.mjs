@@ -56,7 +56,7 @@ test("a generated attack declares one atomic attacker batch", () => {
   const event = generateEvent({
     turn: 10,
     counter: 1,
-    seed: "ATOMIC-0",
+    seed: "ATOMIC-7",
     opponents: [{ id: "one", name: "One", profile: "swarm", bracket: 5, life: 40, commanderDamage: {}, eliminated: false }],
     recentTemplateIds: [],
     activeThreat: false,
@@ -116,7 +116,7 @@ test("event generation honors the same-turn combat lock", () => {
   const input = {
     turn: 10,
     counter: 1,
-    seed: "ATOMIC-0",
+    seed: "ATOMIC-7",
     opponents: [{ id: "one", name: "One", profile: "swarm", bracket: 5, life: 40, commanderDamage: {}, eliminated: false }],
     recentTemplateIds: [],
     activeThreat: false,
