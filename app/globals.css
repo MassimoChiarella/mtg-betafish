@@ -832,3 +832,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 .correction-form select { width: 100%; min-height: 44px; border: 1px solid var(--control-line); border-radius: 8px; background: var(--surface); color: var(--ink); padding: 10px 12px; font: inherit; }
 .correction-form > label:not(.check-label) { display: grid; gap: 7px; }
+.due-effects { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 20px; }
+.due-effects > p, .due-effects article p { color: var(--muted); font-size: 14px; line-height: 1.5; }
+.due-effects article { padding-block: 12px; border-top: 1px solid var(--line); }
+.due-effects article small { display: block; margin-top: 6px; font-size: 14px; }
+.turn-strip > small { font-size: 14px; }

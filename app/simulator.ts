@@ -599,13 +599,16 @@ export function generateEvent(input: {
   recentTemplateIds: string[];
   activeThreat: boolean;
   combatResolvedTurn?: number | null;
+  sourceId?: string;
 }): SimEvent {
   const { turn, counter, seed, recentTemplateIds, activeThreat, combatResolvedTurn } = input;
   const livingOpponents = input.opponents.filter((opponent) => !opponent.eliminated);
   if (!livingOpponents.length) throw new Error("Cannot generate an event without a living opponent.");
   const random = rngFor(`${seed}:${turn}:${counter}`);
   const eventId = `event-${turn}-${counter}`;
-  const source = livingOpponents[intBetween(random, 0, livingOpponents.length - 1)];
+  const randomSource = livingOpponents[intBetween(random, 0, livingOpponents.length - 1)];
+  const source = input.sourceId ? livingOpponents.find((opponent) => opponent.id === input.sourceId) : randomSource;
+  if (!source) throw new Error("The scheduled opponent must be active.");
   const profile = DECK_PROFILES[source.profile];
   const bracket = normalizeCommanderBracket(source.bracket);
   const bracketRules = COMMANDER_BRACKETS[bracket];

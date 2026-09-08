@@ -61,6 +61,7 @@ import { scryfallImageUrl, scryfallReferenceUrl } from "./scryfall";
 import { spellOutcome, type SpellResult } from "./spell-outcome";
 import { expireThreat, payReservoir, reservoirDamage } from "./win-attempt";
 import { coreOutcome } from "./opponent-development";
+import { activeReminders, nextRoundAction, remindersAfterResolution } from "./round-flow";
 
 type OutgoingAttacker = {
   id: string;
@@ -98,7 +99,7 @@ function cloneOpponents(opponents: readonly Opponent[]): Opponent[] {
   }));
 }
 
-function createInitialGame(seed = "GILDED-732", opponents: readonly Opponent[] = DEFAULT_OPPONENTS): GameState {
+function createInitialGame(seed = "GILDED-732", opponents: readonly Opponent[] = DEFAULT_OPPONENTS, roundMode: "quick" | "table" = "quick"): GameState {
   const safeOpponents = cloneOpponents(opponents);
   const currentEvent = generateEvent({
     turn: 1,
@@ -108,6 +109,7 @@ function createInitialGame(seed = "GILDED-732", opponents: readonly Opponent[] =
     recentTemplateIds: [],
     activeThreat: false,
     combatResolvedTurn: null,
+    sourceId: roundMode === "table" ? safeOpponents.find((opponent) => !opponent.eliminated)?.id : undefined,
   });
   return {
     version: GAME_STATE_VERSION,
@@ -133,6 +135,10 @@ function createInitialGame(seed = "GILDED-732", opponents: readonly Opponent[] =
     combatResolvedTurn: null,
     counterExchange: 0,
     gameOver: null,
+    roundMode,
+    actedOpponentIds: [],
+    roundCombatIds: [],
+    reminders: [],
   };
 }
 
@@ -469,6 +475,7 @@ export default function Home() {
   const importRequest = useRef(0);
   const [settingsOpponents, setSettingsOpponents] = useState<Opponent[]>([]);
   const [settingsSeed, setSettingsSeed] = useState("");
+  const [settingsMode, setSettingsMode] = useState<"quick" | "table">("quick");
   const [settingsNameError, setSettingsNameError] = useState("");
   const [settingsTableError, setSettingsTableError] = useState("");
   const [correctionTarget, setCorrectionTarget] = useState<"user" | string>("user");
@@ -702,6 +709,7 @@ export default function Home() {
   function commit(update: (previous: GameState) => GameState) {
     const previous = gameRef.current;
     const next = update(previous);
+    if (next.reminders) next.reminders = activeReminders(next);
     undoStack.current = [...undoStack.current.slice(-9), previous];
     gameRef.current = next;
     setGame(next);
@@ -809,6 +817,7 @@ export default function Home() {
       "Action does not affect you",
       event.emptyOutcome ?? "The table action did not affect you.",
       "neutral",
+      event.templateId === "goad" ? (previous) => ({ reminders: remindersAfterResolution(previous) }) : {},
     );
     setToxicPaymentError("");
   }
@@ -841,7 +850,7 @@ export default function Home() {
   function letEventResolve() {
     const event = game.currentEvent;
     if (event.kind === "attack") return;
-    if (event.kind === "targeted") { setPendingOutcome({ answered: false }); return; }
+    if (event.kind === "targeted" || event.templateId === "counter-commander") { setPendingOutcome({ answered: false }); return; }
     if (event.kind === "development") {
       resolveEvent("Table developed", `${event.sourceName} advances their game plan. Nothing new targets you.`, "neutral", (previous) => ({ opponents: previous.opponents.map((opponent) => opponent.id === event.sourceId ? { ...opponent, development: nextDevelopment(opponent.development) } : opponent) }));
       return;
@@ -876,7 +885,7 @@ export default function Home() {
       setToxicPaymentError("");
       return;
     }
-    resolveEvent("Table action resolves", `${event.card}: apply the generated outcome in your playtester, then advance the table.`, event.kind === "wipe" ? "warning" : "damage");
+    resolveEvent("Table action resolves", `${event.card}: apply the generated outcome in your playtester, then advance the table.`, event.kind === "wipe" ? "warning" : "damage", (previous) => ({ reminders: remindersAfterResolution(previous) }));
   }
 
   function answerEvent(answer: ResponseOption) {
@@ -924,7 +933,7 @@ export default function Home() {
       redirect: "You changed the target; apply the new target in your playtester.",
       custom: "You supplied another legal answer; apply its exact result in your playtester.",
     };
-    if (event.kind === "targeted") { setPendingOutcome({ answered: true }); return; }
+    if (event.kind === "targeted" || event.templateId === "counter-commander" || event.templateId === "goad") { setPendingOutcome({ answered: true }); return; }
     const accounting = event.templateId === "minus-wipe"
       ? ` Toxic Deluge’s ${lockedToxicPayment}-life casting cost was already recorded.`
       : "";
@@ -943,7 +952,10 @@ export default function Home() {
     if (!pendingOutcome) return;
     const data = new FormData(event.currentTarget);
     try {
-      const outcome = spellOutcome(game, data.get("spell-result") as SpellResult, String(data.get("target-controller")), Number(data.get("target-power") ?? 0));
+      const result = data.get("spell-result") as SpellResult;
+      const controller = String(data.get("target-controller") ?? "user");
+      const outcome = spellOutcome(game, result, controller, Number(data.get("target-power") ?? 0));
+      if (result === "resolved") outcome.patch.reminders = remindersAfterResolution(game, controller);
       resolveEvent(pendingOutcome.answered ? "Action answered" : "Table action resolves", outcome.detail, pendingOutcome.answered ? "success" : "damage", outcome.patch, pendingOutcome.answered);
       setPendingOutcome(null);
       setOutcomeError("");
@@ -1036,6 +1048,7 @@ export default function Home() {
         opponents,
         gameOver: trackedLoss && lossReason ? `${lossReason}.` : previous.gameOver,
         combatResolvedTurn: previous.turn,
+        roundCombatIds: [...new Set([...(previous.roundCombatIds ?? []), previous.currentEvent.sourceId])],
         answeredCount: addSafeInteger(previous.answeredCount, Number(answered)),
         responseStage: "resolved",
         resolution: detail,
@@ -1067,11 +1080,13 @@ export default function Home() {
       if (opponents.every((opponent) => opponent.eliminated)) {
         return { ...previous, opponents, activeThreat: null, gameOver: "You eliminated every simulated opponent." };
       }
-      const turn = addSafeInteger(previous.turn, 1);
-      const expired = expireThreat({ ...previous, opponents }, turn);
-      if (expired) return { ...previous, ...expired, history: [historyEntry({ ...previous, turn }, "Win attempt begins", "The clock expires. Resolve the actual attempt before deciding whether anyone wins.", "warning"), ...previous.history].slice(0, 40) };
+      const nextAction = nextRoundAction({ ...previous, opponents });
+      const turn = nextAction.turn;
+      const roundEnded = turn !== previous.turn;
+      const expired = roundEnded ? expireThreat({ ...previous, opponents }, turn) : null;
+      if (expired) return { ...previous, actedOpponentIds: nextAction.actedOpponentIds, roundCombatIds: nextAction.roundCombatIds, ...expired, history: [historyEntry({ ...previous, turn }, "Win attempt begins", "The clock expires. Resolve the actual attempt before deciding whether anyone wins.", "warning"), ...previous.history].slice(0, 40) };
       let activeThreat = previous.activeThreat;
-      if (activeThreat) {
+      if (activeThreat && roundEnded) {
         activeThreat = { ...activeThreat, remaining: Math.max(0, addSafeInteger(activeThreat.remaining, -1)) };
       }
       const recentTemplateIds = [previous.currentEvent.templateId, ...previous.recentTemplateIds].slice(0, 3);
@@ -1083,7 +1098,8 @@ export default function Home() {
         opponents,
         recentTemplateIds,
         activeThreat: Boolean(activeThreat),
-        combatResolvedTurn: previous.combatResolvedTurn,
+        combatResolvedTurn: previous.roundMode === "table" ? nextAction.roundCombatIds.includes(nextAction.sourceId ?? "") ? turn : null : previous.combatResolvedTurn,
+        sourceId: nextAction.sourceId,
       });
       return {
         ...previous,
@@ -1098,12 +1114,15 @@ export default function Home() {
         counterExchange: 0,
         activeThreat,
         recentTemplateIds,
+        actedOpponentIds: nextAction.actedOpponentIds,
+        roundCombatIds: nextAction.roundCombatIds,
       };
     });
   }
 
   function continueAfterGameOver() {
     setGame((previous) => {
+      const sourceId = previous.roundMode === "table" ? previous.opponents.find((opponent) => opponent.id === previous.currentEvent.sourceId && !opponent.eliminated)?.id ?? previous.opponents.find((opponent) => !opponent.eliminated)?.id : undefined;
       const recentTemplateIds = [previous.currentEvent.templateId, ...previous.recentTemplateIds].slice(0, 3);
       const eventCounter = addSafeInteger(previous.eventCounter, 1);
       return {
@@ -1119,7 +1138,8 @@ export default function Home() {
           opponents: previous.opponents,
           recentTemplateIds,
           activeThreat: false,
-          combatResolvedTurn: previous.combatResolvedTurn,
+          combatResolvedTurn: previous.roundMode === "table" ? previous.roundCombatIds?.includes(sourceId ?? "") ? previous.turn : null : previous.combatResolvedTurn,
+          sourceId,
         }),
         responseStage: "prompt",
         resolution: "",
@@ -1183,6 +1203,7 @@ export default function Home() {
     const result = String(data.get("core-result"));
     try {
       const patch = coreOutcome(game, result, Number(data.get("core-source-life")), Number(data.get("core-user-life")), data.get("core-development") as DevelopmentState);
+      if (result === "resolved" || (result === "answered" && game.currentEvent.card === "The One Ring")) patch.reminders = remindersAfterResolution(game, String(data.get("core-spell-controller") ?? "user"));
       const detail = result === "not-viable" ? `${game.currentEvent.card}: prerequisites were not present; no action occurred.` : `${game.currentEvent.card} ${result === "answered" ? "was answered" : "resolved"}. Costs, exact effects and final totals were confirmed in the playtester.${result === "resolved" ? ` ${game.currentEvent.sourceName} is ${data.get("core-development")}.` : ""}`;
       resolveEvent(result === "answered" ? "Core-card action answered" : "Core-card outcome", detail, result === "answered" ? "success" : "neutral", patch, result === "answered");
       setOutcomeError("");
@@ -1378,6 +1399,7 @@ export default function Home() {
   function openSettings() {
     setSettingsOpponents(cloneOpponents(game.opponents));
     setSettingsSeed(game.seed);
+    setSettingsMode(game.roundMode ?? "quick");
     setSettingsNameError("");
     setSettingsTableError("");
     setActiveModal("settings");
@@ -1417,6 +1439,7 @@ export default function Home() {
       const isFollowUp = previous.responseStage === "resolved";
       const recentTemplateIds = isFollowUp ? [previous.currentEvent.templateId, ...previous.recentTemplateIds].slice(0, 3) : previous.recentTemplateIds;
       const eventCounter = addSafeInteger(previous.eventCounter, 1);
+      const sourceId = previous.roundMode === "table" ? opponents.find((opponent) => opponent.id === previous.currentEvent.sourceId && !opponent.eliminated)?.id ?? opponents.find((opponent) => !opponent.eliminated)?.id : undefined;
       const generatedEvent = generateEvent({
         turn: previous.turn,
         counter: eventCounter,
@@ -1424,7 +1447,8 @@ export default function Home() {
         opponents,
         recentTemplateIds,
         activeThreat: Boolean(activeThreat),
-        combatResolvedTurn: previous.combatResolvedTurn,
+        combatResolvedTurn: previous.roundMode === "table" ? previous.roundCombatIds?.includes(sourceId ?? "") ? previous.turn : null : previous.combatResolvedTurn,
+        sourceId,
       });
       const currentEvent: SimEvent = isFollowUp ? { ...generatedEvent, tags: ["Follow-up action", ...generatedEvent.tags] } : generatedEvent;
       return {
@@ -1441,6 +1465,8 @@ export default function Home() {
         activeThreat,
         recentTemplateIds,
         history,
+        actedOpponentIds: previous.actedOpponentIds?.filter((id) => opponents.some((opponent) => opponent.id === id)),
+        roundCombatIds: previous.roundCombatIds?.filter((id) => opponents.some((opponent) => opponent.id === id)),
       };
     });
     setToxicPaymentDraft({ eventId: "", value: "0" });
@@ -1448,7 +1474,7 @@ export default function Home() {
     setActiveModal(null);
   }
 
-  function startRun(seed: string, opponents: readonly Opponent[]) {
+  function startRun(seed: string, opponents: readonly Opponent[], mode = game.roundMode ?? "quick") {
     const next = createInitialGame(seed, opponents.map((opponent) => ({
       ...opponent,
       life: 40,
@@ -1457,7 +1483,7 @@ export default function Home() {
       lossProtected: false,
       eliminated: false,
       development: "developing",
-    })));
+    })), mode);
     undoStack.current = [];
     gameRef.current = next;
     setToxicPaymentDraft({ eventId: "", value: "0" });
@@ -1470,7 +1496,7 @@ export default function Home() {
     const configured = configuredSettingsOpponents();
     if (!configured) return;
     setSettingsTableError("");
-    startRun(settingsSeed.trim() || "GILDED-732", configured);
+    startRun(settingsSeed.trim() || "GILDED-732", configured, settingsMode);
   }
 
   function openCombat() {
@@ -1622,8 +1648,13 @@ export default function Home() {
     startRun(`CAST-${Date.now().toString(36).slice(-6).toUpperCase()}`, game.opponents);
   }
 
+  function completeReminder(id: string) {
+    commit((previous) => ({ ...previous, reminders: previous.reminders?.filter((reminder) => reminder.id !== id), history: [historyEntry(previous, "Due effect confirmed", "The reminder was resolved at its stated time in the playtester.", "neutral"), ...previous.history].slice(0, 40) }));
+  }
+
   const maxUserCommanderDamage = highestCommanderDamage(game.userCommanderDamage);
   const tableDefeated = game.opponents.every((opponent) => opponent.eliminated);
+  const nextCadence = nextRoundAction(game);
   const userDefeated = Boolean(evaluateTrackedLoss({ life: game.userLife, poisonCounters: game.userPoisonCounters, commanderDamage: game.userCommanderDamage }, game.userLossProtected));
   const eventCardLookup = (game.currentEvent.kind === "attack" && !isWinAttempt(game.currentEvent)) || game.currentEvent.kind === "development" || game.currentEvent.templateId === "random-discard" || game.currentEvent.templateId === "custom-attempt"
     ? null
@@ -1678,6 +1709,7 @@ export default function Home() {
         </a>
         <div className="turn-strip" aria-label={`Round ${game.turn}`}>
           <span className="eyebrow">Round {game.turn}</span>
+          {game.roundMode === "table" && <small>Seat-by-seat · {game.currentEvent.sourceName}</small>}
           <span className="turn-status-row">
             <b>{game.responseStage !== "resolved" ? "Response window open" : "Ready to advance"}</b>
             {game.activeThreat && <span className={`top-threat ${game.activeThreat.remaining <= 1 ? "imminent" : ""}`}>Threat · {game.activeThreat.remaining} {game.activeThreat.remaining === 1 ? "round" : "rounds"}</span>}
@@ -1771,6 +1803,7 @@ export default function Home() {
                 <span className="eyebrow">Complete this card encounter in your playtester</span>
                 <p>{coreEncounter(game.currentEvent.templateId)?.objectType === "ability" ? "This is an ability: an ordinary counterspell cannot counter it. Removing its source usually does not remove the ability." : coreEncounter(game.currentEvent.templateId)?.objectType === "land" ? "Playing a land does not use the stack and cannot be countered." : "Resolve the spell and any distinct triggers or copies separately."} Record paid costs even when the action is answered.</p>
                 <label>Core-card result<select name="core-result"><option value="resolved">Resolved — effects applied</option><option value="answered">Answered by legal interaction</option><option value="not-viable">No legal opportunity / prerequisites absent</option></select></label>
+                {game.currentEvent.card === "Arcane Denial" && <label>Target spell’s controller<select name="core-spell-controller"><option value="user">You</option>{livingOpponents.map((opponent) => <option value={opponent.id} key={opponent.id}>{opponent.name}</option>)}</select></label>}
                 <div className="correction-primary-fields"><label>{game.currentEvent.sourceName}’s final life<input name="core-source-life" type="number" step="1" min={Number.MIN_SAFE_INTEGER} max={Number.MAX_SAFE_INTEGER} defaultValue={sourceOpponent?.life} required /></label><label>Your final life<input name="core-user-life" type="number" step="1" min={Number.MIN_SAFE_INTEGER} max={Number.MAX_SAFE_INTEGER} defaultValue={game.userLife} required /></label></div>
                 <label>Source board after resolution<select name="core-development" defaultValue={nextDevelopment(sourceOpponent?.development)}><option value="developing">Developing</option><option value="established">Established</option><option value="rebuilding">Rebuilding</option></select></label>
                 <label className="check-label"><input type="checkbox" required />I checked prerequisites and applied the actual costs, effects and interaction in the playtester.</label>
@@ -1852,10 +1885,10 @@ export default function Home() {
           </article>
 
           <div className="next-action">
-            <div><span className="eyebrow">Up next</span><strong>{game.responseStage === "resolved" ? "Advance one full table round." : "Resolve this event, then advance the table."}</strong></div>
+            <div><span className="eyebrow">Up next</span><strong>{game.responseStage === "resolved" ? nextCadence.turn === game.turn ? "The next opponent acts in this round." : "Advance one full table round." : "Resolve this event, then advance the table."}</strong></div>
             <div className="next-buttons">
               <button className="undo-button" type="button" onClick={undo} disabled={!canUndo}>Undo</button>
-              <button className="advance-button" type="button" onClick={advanceTurn} disabled={game.responseStage !== "resolved" || Boolean(game.gameOver)}>Next round <span aria-hidden="true">→</span></button>
+              <button className="advance-button" type="button" onClick={advanceTurn} disabled={game.responseStage !== "resolved" || Boolean(game.gameOver)}>{nextCadence.turn === game.turn ? "Next opponent" : "Next round"} <span aria-hidden="true">→</span></button>
             </div>
           </div>
         </section>
@@ -1896,6 +1929,7 @@ export default function Home() {
         </aside>
 
         <aside className="rail pressure-panel" aria-label="Table pressure">
+          {(game.reminders?.length ?? 0) > 0 && <section className="due-effects" aria-labelledby="due-effects-title"><div className="section-heading"><h2 id="due-effects-title">Due effects</h2></div><p>Confirm these at the stated point in your playtester. Betafish rounds do not replace actual turns or upkeeps.</p>{game.reminders?.map((reminder) => <article key={reminder.id}><strong><CardPreview name={reminder.card} /></strong><small>{reminder.recipientName} · {reminder.due === "next-upkeep" ? "next turn’s upkeep" : `${reminder.sourceName}’s next ${reminder.due === "source-next-turn" ? "turn" : "upkeep"}`}</small><p>{reminder.text}</p><button className="text-button" type="button" onClick={() => completeReminder(reminder.id)}>Confirmed in playtester</button></article>)}</section>}
           <section aria-labelledby="threat-title" aria-live="polite">
             <div className="section-heading">
               <div><h2 id="threat-title" ref={threatHeading} tabIndex={-1}>Active threat</h2></div>
@@ -1957,10 +1991,10 @@ export default function Home() {
         <Modal title="Confirm spell outcome" subtitle="Resolve the response in your playtester, then record what actually happened." onClose={() => { setPendingOutcome(null); setOutcomeError(""); }}>
           {storageConflictNotice}
           <form className="correction-form" onSubmit={confirmSpellOutcome}>
-            <label>Spell result<select name="spell-result" defaultValue="resolved"><option value="resolved">Resolves on a legal target (including indestructible)</option><option value="illegal">All targets are illegal — does not resolve</option><option value="countered">Countered or removed from the stack</option></select></label>
-            <label>Target’s controller at resolution<select name="target-controller" defaultValue="user"><option value="user">You</option>{livingOpponents.map((opponent) => <option value={opponent.id} key={opponent.id}>{opponent.name}</option>)}</select></label>
+            <label>Spell result<select name="spell-result" defaultValue="resolved"><option value="resolved">Resolves — apply its effects</option>{game.currentEvent.templateId !== "goad" && <option value="illegal">All targets are illegal — does not resolve</option>}<option value="countered">Countered or removed from the stack</option></select></label>
+            {game.currentEvent.templateId !== "goad" && <label>Target’s controller at resolution<select name="target-controller" defaultValue="user"><option value="user">You</option>{livingOpponents.map((opponent) => <option value={opponent.id} key={opponent.id}>{opponent.name}</option>)}</select></label>}
             {game.currentEvent.templateId === "exile-commander" && <label>Exiled creature’s power (last known)<input type="number" name="target-power" step="1" min={Number.MIN_SAFE_INTEGER} max={Number.MAX_SAFE_INTEGER} required defaultValue="0" /><small>Swords to Plowshares gives that controller life equal to its power, with a minimum of zero.</small></label>}
-            <p>Hexproof, blink, or phasing may make a target illegal. Indestructible alone does not; Nature’s Claim still grants life and Beast Within still creates a token.</p>
+            <p>{game.currentEvent.templateId === "goad" ? "Disrupt Decorum does not target. Protecting some creatures does not stop it resolving for other affected creatures; record its duration if it resolves." : "Hexproof, blink, or phasing may make a target illegal. Indestructible alone does not; Nature’s Claim still grants life and Beast Within still creates a token."}</p>
             {outcomeError && <p role="alert" className="inline-error">{outcomeError}</p>}
             <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setPendingOutcome(null)}>Back</button><button className="primary-button" type="submit">Confirm outcome</button></div>
           </form>
@@ -1998,6 +2032,8 @@ export default function Home() {
             </div>
             <div className="session-settings">
               <label>Session seed<input value={settingsSeed} onChange={(event) => setSettingsSeed(event.target.value.toUpperCase())} maxLength={24} /></label>
+              <label>New-run cadence<select value={settingsMode} onChange={(event) => setSettingsMode(event.target.value as "quick" | "table")}><option value="quick">Quick — one event per round</option><option value="table">Seat-by-seat — each opponent acts per round</option></select></label>
+              <p>Cadence changes when starting a new run. Seat-by-seat actions cover the round; they are not literal Magic turns. Reactive counterspell scenarios still wait for a spell you can legally cast.</p>
               <p>Reuse a seed with the same choices to replay the same event sequence.</p>
               <p>Apply and reroll updates this run. After resolution, it generates one follow-up action this round; if combat already occurred, that follow-up will not be another combat. Start a new run resets to round 1 and event 1 using this exact seed.</p>
               <div className="bracket-guide"><span className="eyebrow">Bracket guide</span><strong>Official intent, Betafish-tuned odds</strong><p>MTG Betafish translates Wizards’ bracket pacing guidance into when pressure and game-ending clocks may appear. It also scales attacks, counters, removal, and defenses as simulation heuristics.</p><ol>{Object.entries(COMMANDER_BRACKETS).map(([value, rules]) => <li key={value}><b>B{value}</b><span>{rules.label}</span><small>{rules.turnGuide}</small></li>)}</ol><a href="https://magic.wizards.com/en/formats/commander" target="_blank" rel="noreferrer">View Wizards’ beta bracket guide <span aria-hidden="true">↗</span></a></div>

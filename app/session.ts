@@ -18,12 +18,23 @@ import {
   type SimEvent,
   type Threat,
 } from "./simulator.ts";
+import { activeReminders } from "./round-flow.ts";
 
 export const GAME_STATE_VERSION = 7 as const;
 export const CATALOG_REVISION = 1;
 
 export type ResponseStage = "prompt" | "choose" | "counterback" | "combat" | "resolved";
 export type HistoryTone = "success" | "damage" | "warning" | "neutral";
+export type EffectReminder = {
+  id: string;
+  sourceId: string;
+  sourceName: string;
+  recipientId: string;
+  recipientName: string;
+  due: "next-upkeep" | "source-next-turn" | "source-next-upkeep";
+  card: string;
+  text: string;
+};
 
 export type HistoryEntry = {
   id: string;
@@ -57,6 +68,10 @@ export type GameState = {
   combatResolvedTurn: number | null;
   counterExchange: number;
   gameOver: string | null;
+  roundMode?: "quick" | "table";
+  actedOpponentIds?: string[];
+  roundCombatIds?: string[];
+  reminders?: EffectReminder[];
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -389,6 +404,20 @@ export function decodeGameState(raw: unknown): GameState | null {
     if (!opponents.every((opponent): opponent is Opponent => opponent !== undefined)
       || new Set(opponents.map(({ id }) => id)).size !== opponents.length) return null;
     const opponentIds = new Set(opponents.map(({ id }) => id));
+    if (raw.roundMode !== undefined && raw.roundMode !== "quick" && raw.roundMode !== "table") return null;
+    const actedOpponentIds = raw.actedOpponentIds === undefined ? undefined : readStringArray(raw.actedOpponentIds, true);
+    const roundCombatIds = raw.roundCombatIds === undefined ? undefined : readStringArray(raw.roundCombatIds, true);
+    for (const [rawValue, ids] of [[raw.actedOpponentIds, actedOpponentIds], [raw.roundCombatIds, roundCombatIds]] as const) {
+      if (rawValue !== undefined && (!ids || !hasUniqueStrings(ids) || ids.some((id) => !opponentIds.has(id)))) return null;
+    }
+    let reminders: EffectReminder[] | undefined;
+    if (raw.reminders !== undefined) {
+      if (!Array.isArray(raw.reminders) || !raw.reminders.every((reminder) => isRecord(reminder)
+        && ["id", "sourceId", "sourceName", "recipientId", "recipientName", "card", "text"].every((key) => isNonemptyString(reminder[key]))
+        && ["next-upkeep", "source-next-turn", "source-next-upkeep"].includes(reminder.due as string))) return null;
+      if (!hasUniqueStrings(raw.reminders.map((reminder) => reminder.id))) return null;
+      reminders = raw.reminders.map(({ id, sourceId, sourceName, recipientId, recipientName, due, card, text }) => ({ id, sourceId, sourceName, recipientId, recipientName, due, card, text }));
+    }
     let gameOver = raw.gameOver as string | null;
     if (opponents.every((opponent) => opponent.eliminated)) {
       if (version >= 6 && gameOver === null) return null;
@@ -544,6 +573,10 @@ export function decodeGameState(raw: unknown): GameState | null {
       combatResolvedTurn,
       counterExchange,
       gameOver,
+      ...(raw.roundMode !== undefined ? { roundMode: raw.roundMode as "quick" | "table" } : {}),
+      ...(actedOpponentIds ? { actedOpponentIds } : {}),
+      ...(roundCombatIds ? { roundCombatIds } : {}),
+      ...(reminders ? { reminders: activeReminders({ reminders, opponents }) } : {}),
     };
   } catch {
     return null;

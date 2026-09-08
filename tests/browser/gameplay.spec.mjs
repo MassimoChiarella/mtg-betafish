@@ -149,3 +149,28 @@ test("wipe setbacks are explicitly chosen and survive reload", async ({ page }) 
   await page.reload();
   await expect(page.getByRole("button", { name: "rebuilding · update board", exact: true })).toBeVisible();
 });
+
+test("seat cadence preserves the round and clock between opponents", async ({ page }) => {
+  const game = fixture("combo-clock", { responseStage: "resolved", roundMode: "table", actedOpponentIds: [], roundCombatIds: [] });
+  game.activeThreat = { ...game.currentEvent.threat, remaining: 3 };
+  await loadFixture(page, game);
+  await page.getByRole("button", { name: /Next opponent/ }).click();
+  await expect.poll(async () => (await stored(page)).currentEvent.sourceId).toBe("two");
+  expect((await stored(page)).turn).toBe(6);
+  expect((await stored(page)).activeThreat.remaining).toBe(3);
+  await page.reload();
+  expect((await stored(page)).actedOpponentIds).toEqual(["one"]);
+});
+
+test("resolved Arcane Denial creates separate persistent upkeep reminders", async ({ page }) => {
+  await loadFixture(page, fixture("counter-commander"));
+  await page.getByRole("button", { name: "No response", exact: true }).click();
+  await page.getByRole("button", { name: "Confirm outcome" }).click();
+  await expect.poll(async () => (await stored(page)).reminders?.length).toBe(2);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Due effects", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Confirmed in playtester", exact: true }).first().click();
+  await expect.poll(async () => (await stored(page)).reminders.length).toBe(1);
+  await page.getByRole("button", { name: "Undo", exact: true }).first().click();
+  await expect.poll(async () => (await stored(page)).reminders.length).toBe(2);
+});

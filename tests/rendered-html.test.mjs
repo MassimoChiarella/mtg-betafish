@@ -106,7 +106,7 @@ test("resolved table settings allow follow-ups while preserving the combat lock"
 
   assert.match(settings, /const isFollowUp = previous\.responseStage === "resolved"/);
   assert.match(settings, /const generatedEvent = generateEvent\(\{/);
-  assert.match(settings, /combatResolvedTurn: previous\.combatResolvedTurn/);
+  assert.match(settings, /combatResolvedTurn: [^\n]*previous\.combatResolvedTurn/);
   assert.doesNotMatch(settings, /signatureFollowUp/);
   assert.match(settings, /tags: \["Follow-up action", \.\.\.generatedEvent\.tags\]/);
   assert.doesNotMatch(settings, /title: `Follow-up action:/);
@@ -144,7 +144,7 @@ test("every next-event path uses ordinary generation without a forced card encou
 
   for (const source of [advance, continuation, settings]) {
     assert.match(source, /generateEvent\(\{/);
-    assert.match(source, /combatResolvedTurn: previous\.combatResolvedTurn/);
+    assert.match(source, /combatResolvedTurn: [^\n]*previous\.combatResolvedTurn/);
     assert.doesNotMatch(source, /signatureFollowUp/);
   }
 });
@@ -250,7 +250,7 @@ test("state replacement clears Toxic input and table edits retain commander iden
   assert.match(saveSettings, /hasTrackedCommanderDamageFromRemovedOpponent\(game, opponents\)/);
   assert.match(saveSettings, /Use Start new run with this seed to remove them without losing the original commander identity/);
   assert.doesNotMatch(saveSettings, /startRun\(/);
-  assert.match(seededRun, /configuredSettingsOpponents\(\)[\s\S]*?if \(!configured\) return;[\s\S]*?startRun\(settingsSeed\.trim\(\) \|\| "GILDED-732", configured\)/);
+  assert.match(seededRun, /configuredSettingsOpponents\(\)[\s\S]*?if \(!configured\) return;[\s\S]*?startRun\(settingsSeed\.trim\(\) \|\| "GILDED-732", configured, settingsMode\)/);
   assert.match(reset, /startRun\(`CAST-\$\{Date\.now\(\)\.toString\(36\)\.slice\(-6\)\.toUpperCase\(\)\}`, game\.opponents\)/);
 
   for (const replacement of [loadConflict, saveSettings, startRun]) {
@@ -284,7 +284,7 @@ test("tracked scenario outcomes and player-facing round language match the simul
   assert.match(pageSource, /game\.currentEvent\.templateId === "minus-wipe" && game\.responseStage === "prompt"/);
   assert.match(pageSource, /className="toxic-payment-locked"[\s\S]*?casting cost is paid and locked/);
   assert.match(pageSource, /id="toxic-payment-error" role="alert"/);
-  assert.match(pageSource, />Next round /);
+  assert.match(pageSource, /"Next opponent" : "Next round"/);
   assert.match(pageSource, /Round \{entry\.turn\}/);
   assert.doesNotMatch(pageSource, />Next turn |Rules reference:|Curated rules-reference library/);
 });
