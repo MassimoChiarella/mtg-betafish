@@ -174,3 +174,38 @@ test("resolved Arcane Denial creates separate persistent upkeep reminders", asyn
   await page.getByRole("button", { name: "Undo", exact: true }).first().click();
   await expect.poll(async () => (await stored(page)).reminders.length).toBe(2);
 });
+
+test("multi-defender combat applies once and undo restores the whole snapshot", async ({ page }) => {
+  const game = fixture(undefined, { seed: "MULTI-1" }); game.activeThreat = { ...fixture("combo-clock").currentEvent.threat, remaining: 2 };
+  await loadFixture(page, game);
+  await page.getByRole("button", { name: /Assign your combat damage/ }).click();
+  for (const [id, name] of [["one", "Alpha"], ["two", "Beta"]]) {
+    await page.getByLabel("New attacker’s defender").selectOption(id);
+    await page.getByLabel("Attacker name", { exact: true }).fill(name);
+    await page.getByLabel("Power", { exact: true }).fill("5");
+    await page.getByRole("button", { name: "Add attacker", exact: true }).click();
+  }
+  await page.getByRole("button", { name: /Roll defenders’ responses/ }).click();
+  await page.getByRole("button", { name: "I can answer One’s defense", exact: true }).click();
+  for (const [name, life, gain] of [["One", "40", "4"], ["Two", "7", "3"]]) {
+    if (name === "Two") {
+      await page.getByRole("button", { name: "I can answer Two’s defense", exact: true }).click();
+      await expect(page.getByRole("group", { name: "Damage to One", exact: true }).getByRole("group", { name: "Regular combat damage step", exact: true }).getByLabel("Life damage", { exact: true })).toHaveValue("40");
+    }
+    const group = page.getByRole("group", { name: `Damage to ${name}`, exact: true });
+    await group.getByRole("checkbox", { name: "Regular combat damage step", exact: true }).check();
+    const regular = group.getByRole("group", { name: "Regular combat damage step", exact: true });
+    await regular.getByLabel("Life damage", { exact: true }).fill(life);
+    await regular.getByLabel("Lifelink life gained", { exact: true }).fill(gain);
+  }
+  await page.getByRole("button", { name: /Apply damage/ }).click();
+  await expect.poll(async () => (await stored(page)).opponents.map(({ life }) => life)).toEqual([0, 33]);
+  expect((await stored(page)).userLife).toBe(47);
+  expect((await stored(page)).activeThreat).toBeNull();
+  expect((await stored(page)).responseStage).toBe("resolved");
+  await page.getByRole("button", { name: "Undo", exact: true }).first().click();
+  await expect.poll(async () => (await stored(page)).opponents.map(({ life }) => life)).toEqual([40, 40]);
+  expect((await stored(page)).userLife).toBe(40);
+  expect((await stored(page)).activeThreat.remaining).toBe(2);
+  expect((await stored(page)).responseStage).toBe("prompt");
+});

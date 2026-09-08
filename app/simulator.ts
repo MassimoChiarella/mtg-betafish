@@ -781,9 +781,10 @@ export function resolveCombatDamage(input: {
   let lifeDamage = 0;
   let poisonAdded = 0;
   let lifelinkGain = 0;
-  let loss: TrackedLoss | null = null;
+  let loss = evaluateTrackedLoss({ life, poisonCounters, commanderDamage }, input.lossProtected);
 
   for (const stepName of ["first", "regular"] as const) {
+    if (loss) break;
     const step = combineCombatDamageStep(steps, stepName);
     if (!step) continue;
     Object.entries(step.commanderHits).forEach(([source, damage]) => addCommanderHit(commanderDamage, source, damage));

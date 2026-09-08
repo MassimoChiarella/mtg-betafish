@@ -95,8 +95,8 @@ test("game-over recovery preserves the expired round event, undo, correction, an
   assert.doesNotMatch(hydration, /window\.localStorage\.removeItem\(STORAGE_KEY\)/);
   assert.match(pageSource, /applyIncoming\(zeroCombatSteps\(incomingDamageSteps\), "Combat prevented", true\)/);
   assert.match(sourceSection(pageSource, "function stopThreat()", "function delayThreat()"), /answeredCount: addSafeInteger\(previous\.answeredCount, 1\)/);
-  assert.match(sourceSection(pageSource, "function answerDefense()", "function applyOutgoingDamage("), /setDefenseAnswered\(true\)/);
-  assert.match(sourceSection(pageSource, "function applyOutgoingDamage(", "function undo()"), /answeredCount: addSafeInteger\(previous\.answeredCount, Number\(defenseAnswered\)\)/);
+  assert.match(sourceSection(pageSource, "function answerDefense(", "function applyOutgoingDamage("), /setDefenseAnswered\(\(previous\) => \[\.\.\.new Set\(\[\.\.\.previous, id\]\)\]\)/);
+  assert.match(sourceSection(pageSource, "function applyOutgoingDamage(", "function undo()"), /answeredCount: addSafeInteger\(previous\.answeredCount, defenseAnswered\.length\)/);
 });
 
 test("resolved table settings allow follow-ups while preserving the combat lock", () => {
@@ -161,14 +161,14 @@ test("ongoing loss protection is initialized, persisted, rechecked, and explicit
   assert.match(incoming, /lossProtected = game\.userLossProtected/);
   assert.match(incoming, /userLossProtected: lossProtected/);
   assert.match(incoming, /evaluateTrackedLoss\(\{ life: result\.life, poisonCounters: result\.poisonCounters, commanderDamage: result\.commanderDamage \}, lossProtected\)/);
-  assert.match(outgoing, /evaluateTrackedLoss\(\{ life: result\.life, poisonCounters: result\.poisonCounters, commanderDamage: result\.commanderDamage \}, lossProtected\)/);
+  assert.match(outgoing, /resolveMultiCombat\(previous\.opponents, defenders, allCombatFog && !ignoreFog\)/);
   assert.match(advance, /previous\.userLossProtected/);
   assert.match(advance, /opponent\.lossProtected/);
   assert.match(ending, /userLossProtected: false/);
   assert.match(ending, /lossProtected: false/);
   assert.match(ending, /sourceEliminated = targetEliminated && previous\.responseStage !== "resolved"/);
   assert.match(pageSource, /name="incoming-loss-protected"[^>]+defaultChecked=\{game\.userLossProtected\}/);
-  assert.match(pageSource, /name="outgoing-loss-protected"[^>]+defaultChecked=/);
+  assert.match(pageSource, /name=\{`\$\{group\.prefix\}-loss-protected`\}[^>]+defaultChecked=\{group\.target\.lossProtected\}/);
   assert.match(pageSource, />End effect<\/button>/);
   assert.doesNotMatch(pageSource, /loss-prevented|lossPrevented/);
 });

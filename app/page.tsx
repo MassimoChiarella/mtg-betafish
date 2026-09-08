@@ -62,9 +62,11 @@ import { spellOutcome, type SpellResult } from "./spell-outcome";
 import { expireThreat, payReservoir, reservoirDamage } from "./win-attempt";
 import { coreOutcome } from "./opponent-development";
 import { activeReminders, nextRoundAction, remindersAfterResolution } from "./round-flow";
+import { resolveMultiCombat } from "./multi-combat";
 
 type OutgoingAttacker = {
   id: string;
+  defenderId: string;
   name: string;
   power: number;
   isCommander: boolean;
@@ -487,9 +489,10 @@ export default function Home() {
   const [attackerCommander, setAttackerCommander] = useState(false);
   const [attackerCommanderSlot, setAttackerCommanderSlot] = useState<CommanderSlot>("primary");
   const [attackerKeywords, setAttackerKeywords] = useState<Keyword[]>([]);
-  const [defense, setDefense] = useState<DefenseResult | null>(null);
+  const [defense, setDefense] = useState<Record<string, DefenseResult> | null>(null);
   const [defenseRollCounter, setDefenseRollCounter] = useState(0);
-  const [defenseAnswered, setDefenseAnswered] = useState(false);
+  const [defenseAnswered, setDefenseAnswered] = useState<string[]>([]);
+  const [ignoreFog, setIgnoreFog] = useState(false);
   const [outgoingAttackerError, setOutgoingAttackerError] = useState("");
   const [toxicPaymentDraft, setToxicPaymentDraft] = useState<{ eventId: string; value: string }>({ eventId: "", value: "0" });
   const [toxicPaymentError, setToxicPaymentError] = useState("");
@@ -1510,7 +1513,8 @@ export default function Home() {
     setAttackerKeywords([]);
     setDefense(null);
     setDefenseRollCounter(game.defenseCounter);
-    setDefenseAnswered(false);
+    setDefenseAnswered([]);
+    setIgnoreFog(false);
     setOutgoingAttackerError("");
     setActiveModal("combat");
   }
@@ -1525,6 +1529,7 @@ export default function Home() {
     }
     const attacker: OutgoingAttacker = {
       id: crypto.randomUUID(),
+      defenderId: combatTarget,
       name: attackerName.trim() || (attackerCommander ? USER_COMMANDER_LABELS[userCommanderKey(attackerCommanderSlot)] : `Attacker ${outgoingAttackers.length + 1}`),
       power,
       isCommander: attackerCommander,
@@ -1538,14 +1543,16 @@ export default function Home() {
     setAttackerKeywords([]);
     setOutgoingAttackerError("");
     setDefense(null);
-    setDefenseAnswered(false);
+    setDefenseAnswered([]);
+    setIgnoreFog(false);
     requestAnimationFrame(() => attackerNameInput.current?.focus());
   }
 
   function removeOutgoingAttacker(id: string, index: number) {
     setOutgoingAttackers((current) => current.filter((attacker) => attacker.id !== id));
     setDefense(null);
-    setDefenseAnswered(false);
+    setDefenseAnswered([]);
+    setIgnoreFog(false);
     requestAnimationFrame(() => {
       const buttons = outgoingList.current?.querySelectorAll<HTMLButtonElement>("article > button");
       const nextButton = buttons?.[Math.min(index, buttons.length - 1)];
@@ -1554,8 +1561,8 @@ export default function Home() {
     });
   }
 
-  function outgoingCombatAttackers(ignoredId?: string): Attacker[] {
-    return outgoingAttackers.filter((attacker) => attacker.id !== ignoredId).map((attacker) => ({
+  function outgoingCombatAttackers(defenderId: string, ignoredId?: string): Attacker[] {
+    return outgoingAttackers.filter((attacker) => attacker.defenderId === defenderId && attacker.id !== ignoredId).map((attacker) => ({
       ...attacker,
       toughness: attacker.power,
       commanderId: attacker.isCommander ? userCommanderKey(attacker.commanderSlot ?? "primary") : undefined,
@@ -1564,72 +1571,46 @@ export default function Home() {
   }
 
   function simulateDefense() {
-    const target = game.opponents.find((opponent) => opponent.id === combatTarget);
-    if (!target || !outgoingAttackers.length) return;
-    const nextCounter = addSafeInteger(defenseRollCounter, 1);
-    const result = rollDefense({
-      profile: target.profile,
-      bracket: normalizeCommanderBracket(target.bracket),
-      seed: game.seed,
-      turn: game.turn,
-      counter: nextCounter,
-      attackers: outgoingAttackers,
-    });
-    setDefense(result);
+    if (!outgoingAttackers.length) return;
+    let nextCounter = defenseRollCounter;
+    const results = Object.fromEntries(livingOpponents.filter((target) => outgoingAttackers.some((attacker) => attacker.defenderId === target.id)).map((target) => {
+      nextCounter = addSafeInteger(nextCounter, 1);
+      return [target.id, rollDefense({ profile: target.profile, bracket: normalizeCommanderBracket(target.bracket), seed: game.seed, turn: game.turn, counter: nextCounter, attackers: outgoingAttackers.filter((attacker) => attacker.defenderId === target.id) })];
+    }));
+    setDefense(results);
     setDefenseRollCounter(nextCounter);
-    setDefenseAnswered(false);
+    setDefenseAnswered([]);
+    setIgnoreFog(false);
   }
 
-  function answerDefense() {
-    if (!defense || defense.type === "none") return;
-    setDefense({ type: "none", title: "Defense answered", detail: "Your interaction stops the defensive play. Resolve combat normally." });
-    setDefenseAnswered(true);
+  function answerDefense(id: string) {
+    if (!defense || !defense[id] || defense[id].type === "none") return;
+    setDefense({ ...defense, [id]: { type: "none", title: "Defense answered", detail: "Your interaction stops this defensive play. Other defenders’ responses still apply." } });
+    setDefenseAnswered((previous) => [...new Set([...previous, id])]);
+    setIgnoreFog(false);
   }
 
   function applyOutgoingDamage(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const target = game.opponents.find((opponent) => opponent.id === combatTarget);
-    if (!target || !defense) return;
+    if (!defense || !outgoingGroups.length) return;
     const data = new FormData(event.currentTarget);
-    const steps = stepsFromForm(data, "outgoing", outgoingDamageSteps, Object.keys(USER_COMMANDER_LABELS));
-    const lossProtected = data.get("outgoing-loss-protected") === "on";
+    const defenders = outgoingGroups.map((group) => ({ id: group.target.id, steps: stepsFromForm(data, group.prefix, group.steps, Object.keys(USER_COMMANDER_LABELS)), lossProtected: data.get(`${group.prefix}-loss-protected`) === "on" }));
     commit((previous) => {
-      const previousTarget = previous.opponents.find((opponent) => opponent.id === target.id);
-      if (!previousTarget) return previous;
-      const result = resolveCombatDamage({
-        state: {
-          life: previousTarget.life,
-          poisonCounters: previousTarget.poisonCounters,
-          commanderDamage: previousTarget.commanderDamage,
-        },
-        steps,
-        lossProtected,
-      });
-      const trackedLoss = evaluateTrackedLoss({ life: result.life, poisonCounters: result.poisonCounters, commanderDamage: result.commanderDamage }, lossProtected);
-      const opponents = previous.opponents.map((opponent) => opponent.id === target.id
-        ? { ...opponent, life: result.life, poisonCounters: result.poisonCounters, commanderDamage: result.commanderDamage, lossProtected, eliminated: opponent.eliminated || Boolean(trackedLoss) }
-        : opponent);
-      const reason = trackedLoss?.reason === "commander"
-        ? `${USER_COMMANDER_LABELS[trackedLoss.lethalCommander ?? ""] ?? trackedLoss.lethalCommander} reached 21 commander damage.`
-        : trackedLoss?.reason === "poison"
-          ? `${target.name} reached ${result.poisonCounters} poison counters.`
-          : trackedLoss?.reason === "life"
-            ? `${target.name} reached ${result.life} life.`
-            : "";
-      const detail = `${result.stepsApplied.map((step) => step === "first" ? "First-strike" : "regular").join(" and ") || "No"} damage step${result.stepsApplied.length === 1 ? "" : "s"}: ${result.lifeDamage} life damage and ${result.poisonAdded} poison assigned to ${target.name}. You gained ${result.lifelinkGain} life from lifelink.${lossProtected ? ` ${target.name}’s ongoing effect says they can’t lose until you end it.` : ""}${reason ? ` ${reason}` : ""}`;
+      const { opponents, results, lifelinkGain } = resolveMultiCombat(previous.opponents, defenders, allCombatFog && !ignoreFog);
+      const detail = results.map((result) => `${previous.opponents.find((opponent) => opponent.id === result.id)?.name}: ${result.lifeDamage} life damage, ${result.poisonAdded} poison; ${result.stepsApplied.join(" + ") || "no"} damage steps.${result.defeated ? ` Eliminated by ${result.lossReason}${result.lethalCommander ? ` (${USER_COMMANDER_LABELS[result.lethalCommander] ?? result.lethalCommander})` : ""}.` : ""}${result.lossProtected ? " Ongoing can’t-lose effect retained." : ""}`).join(" ") + ` You gained ${lifelinkGain} life from lifelink. All defenders recorded together.`;
       const tableDefeated = opponents.every((opponent) => opponent.eliminated);
-      const sourceEliminated = Boolean(trackedLoss) && previous.responseStage !== "resolved" && previous.currentEvent.sourceId === target.id;
-      const sourceResolution = `${target.name} left the game, so their pending action was removed from the stack or combat.`;
-      const damageHistory = historyEntry(previous, trackedLoss ? `${target.name} eliminated` : `Damage assigned to ${target.name}`, detail, trackedLoss ? "success" : "damage");
+      const sourceEliminated = previous.responseStage !== "resolved" && opponents.some((opponent) => opponent.id === previous.currentEvent.sourceId && opponent.eliminated);
+      const sourceResolution = `${previous.currentEvent.sourceName} left the game, so their pending action was removed from the stack or combat.`;
+      const damageHistory = historyEntry(previous, "Outgoing combat resolved", `${detail}${sourceEliminated ? ` ${sourceResolution}` : ""}`, "damage");
       return {
         ...previous,
-        userLife: addSafeInteger(previous.userLife, result.lifelinkGain),
+        userLife: addSafeInteger(previous.userLife, lifelinkGain),
         defenseCounter: defenseRollCounter,
-        answeredCount: addSafeInteger(previous.answeredCount, Number(defenseAnswered)),
+        answeredCount: addSafeInteger(previous.answeredCount, defenseAnswered.length),
         opponents,
-        activeThreat: trackedLoss && previous.activeThreat?.ownerId === target.id ? null : previous.activeThreat,
+        activeThreat: opponents.some((opponent) => opponent.id === previous.activeThreat?.ownerId && opponent.eliminated) ? null : previous.activeThreat,
         gameOver: tableDefeated ? "You eliminated every simulated opponent." : previous.gameOver,
-        history: [damageHistory, ...(sourceEliminated ? [historyEntry(previous, "Pending action cancelled", sourceResolution, "neutral")] : []), ...previous.history].slice(0, 40),
+        history: [damageHistory, ...previous.history].slice(0, 40),
         ...(sourceEliminated ? { responseStage: "resolved" as const, resolution: sourceResolution } : {}),
       };
     });
@@ -1661,13 +1642,17 @@ export default function Home() {
     : game.currentEvent.card === "Thassa’s Oracle line" ? "Thassa’s Oracle" : game.currentEvent.card;
   // eslint-disable-next-line react-hooks/refs -- commit, undo, and reset pair each stack mutation with a game-state render
   const canUndo = undoStack.current.length > 0;
-  const removedAttackerId = defense?.type === "removal" ? [...outgoingAttackers].sort((a, b) => b.power - a.power)[0]?.id : undefined;
-  const outgoingFullDamageSteps = buildDefaultCombatDamageSteps(outgoingCombatAttackers(removedAttackerId));
-  const outgoingDamageSteps = defense?.type === "fog" ? zeroCombatSteps(outgoingFullDamageSteps) : outgoingFullDamageSteps;
+  const allCombatFog = Object.values(defense ?? {}).some((result) => result.type === "fog");
+  const outgoingGroups = livingOpponents.filter((target) => outgoingAttackers.some((attacker) => attacker.defenderId === target.id)).map((target) => {
+    const attackers = outgoingAttackers.filter((attacker) => attacker.defenderId === target.id);
+    const removedAttackerId = defense?.[target.id]?.type === "removal" ? [...attackers].sort((a, b) => b.power - a.power)[0]?.id : undefined;
+    const fullSteps = buildDefaultCombatDamageSteps(outgoingCombatAttackers(target.id, removedAttackerId));
+    return { target, prefix: `outgoing-${encodeURIComponent(target.id)}`, steps: allCombatFog && !ignoreFog ? zeroCombatSteps(fullSteps) : fullSteps };
+  });
   const encounterGlossaryTerms = new Set<GlossaryKey>();
   const outgoingDamageTerms: GlossaryKey[] = [];
   if (outgoingAttackers.some((attacker) => attacker.isCommander)) outgoingDamageTerms.push("Commander damage");
-  if (outgoingDamageSteps.some((step) => step.lifelinkGain > 0)) outgoingDamageTerms.push("Lifelink");
+  if (outgoingGroups.some((group) => group.steps.some((step) => step.lifelinkGain > 0))) outgoingDamageTerms.push("Lifelink");
   const correctionOpponent = correctionTarget === "user" ? undefined : game.opponents.find((opponent) => opponent.id === correctionTarget);
   const correctionDamage = correctionTarget === "user" ? game.userCommanderDamage : correctionOpponent?.commanderDamage ?? {};
   const correctionLabels = incomingCommanderLabels;
@@ -1683,7 +1668,7 @@ export default function Home() {
     conflict: "Save conflict needs a choice",
     discarded: "Incompatible draft preserved in Save / restore",
   };
-  const liveMessage = (activeModal === "combat" && defense ? `Defense roll: ${defense.title}. ${defense.detail}` : null)
+  const liveMessage = (activeModal === "combat" && defense ? Object.entries(defense).map(([id, result]) => `${game.opponents.find((opponent) => opponent.id === id)?.name}: ${result.title}. ${result.detail}`).join(" ") : null)
     ?? (game.responseStage === "counterback" ? "Your counter was countered. Choose whether to counter again or let the original action resolve." : null)
     ?? (game.responseStage === "choose" ? `Response choices are ready: ${game.currentEvent.responseOptions.join(", ")}.` : null)
     ?? (game.responseStage === "combat" ? "Ordered combat-damage fields are ready. Record life, poison, commander damage, and lifelink for each step." : null)
@@ -2045,10 +2030,10 @@ export default function Home() {
       )}
 
       {activeModal === "combat" && (
-        <Modal title="Assign your attack" subtitle="Record one defending player per submission. Reopen this form for another defender or an externally created extra combat; the simulated round will not advance." onClose={() => setActiveModal(null)} wide>
+        <Modal title="Assign your attack" subtitle="Declare attackers across living defenders, then record this combat together. Reopen for an externally created extra combat; the simulated round will not advance." onClose={() => setActiveModal(null)} wide>
           {storageConflictNotice}
           <div className="combat-builder">
-            <label className="target-select">Attack target<select value={combatTarget} onChange={(event) => { setCombatTarget(event.target.value); setDefense(null); setDefenseAnswered(false); }}>{livingOpponents.map((opponent) => <option value={opponent.id} key={opponent.id}>{opponent.name} · {PROFILE_LABELS[opponent.profile]} · {bracketLabel(opponent.bracket)} · {opponent.life} life · {opponent.poisonCounters} poison</option>)}</select></label>
+            <label className="target-select">New attacker’s defender<select value={combatTarget} onChange={(event) => setCombatTarget(event.target.value)}>{livingOpponents.map((opponent) => <option value={opponent.id} key={opponent.id}>{opponent.name} · {PROFILE_LABELS[opponent.profile]} · {bracketLabel(opponent.bracket)} · {opponent.life} life · {opponent.poisonCounters} poison</option>)}</select></label>
             <form className="attacker-form" onSubmit={addOutgoingAttacker}>
               <label>Attacker name<input ref={attackerNameInput} placeholder="e.g. Atraxa" value={attackerName} onChange={(event) => setAttackerName(event.target.value)} /></label>
               <label>Power<input type="number" min="0" max={Number.MAX_SAFE_INTEGER} step="1" value={attackerPower} onChange={(event) => setAttackerPower(nonnegativeSafeInteger(Number(event.target.value)) ?? 0)} /></label>
@@ -2061,26 +2046,25 @@ export default function Home() {
 
             <div className="outgoing-list" ref={outgoingList}>
               {outgoingAttackers.length ? outgoingAttackers.map((attacker, index) => (
-                <article key={attacker.id}><div><strong>{attacker.name}</strong><small>{attacker.isCommander ? USER_COMMANDER_LABELS[userCommanderKey(attacker.commanderSlot ?? "primary")] : "Creature"}</small></div><b>{attacker.power} power</b><div className="keyword-row">{attacker.keywords.map((keyword) => <KeywordChip keyword={keyword} key={keyword} />)}</div><button type="button" onClick={() => removeOutgoingAttacker(attacker.id, index)} aria-label={`Remove ${attacker.name}`}>×</button></article>
+                <article key={attacker.id}><div><strong>{attacker.name}</strong><small>{attacker.isCommander ? USER_COMMANDER_LABELS[userCommanderKey(attacker.commanderSlot ?? "primary")] : "Creature"} → {game.opponents.find((opponent) => opponent.id === attacker.defenderId)?.name}</small></div><b>{attacker.power} power</b><div className="keyword-row">{attacker.keywords.map((keyword) => <KeywordChip keyword={keyword} key={keyword} />)}</div><button type="button" onClick={() => removeOutgoingAttacker(attacker.id, index)} aria-label={`Remove ${attacker.name}`}>×</button></article>
               )) : <div className="empty-attackers">No attackers added yet.</div>}
             </div>
 
-            <button className="roll-button" type="button" onClick={simulateDefense} disabled={!outgoingAttackers.length || !combatTarget}>{defense ? "Reroll and replace current defense" : "Roll defending player’s response"} <span aria-hidden="true">↻</span></button>
+            <button className="roll-button" type="button" onClick={simulateDefense} disabled={!outgoingAttackers.length || !combatTarget}>{defense ? "Reroll all defenses" : "Roll defenders’ responses"} <span aria-hidden="true">↻</span></button>
 
             {defense && (
-              <div className={`defense-result defense-${defense.type}`} ref={defenseResult} tabIndex={-1}>
-                <span className="eyebrow">Defense outcome</span><h3><GlossaryText text={defense.title} /></h3><p><GlossaryText text={defense.detail} /></p>
-                {defense.type !== "none" && <button className="text-button" type="button" onClick={answerDefense}>I can answer this defense</button>}
+              <div ref={defenseResult} tabIndex={-1}>
+                {outgoingGroups.map(({ target }) => { const result = defense[target.id]; return result && <section className={`defense-result defense-${result.type}`} key={target.id} aria-label={`${target.name} defense`}><span className="eyebrow">{target.name}’s defense</span><h3><GlossaryText text={result.title} /></h3><p><GlossaryText text={result.detail} /></p>{result.type !== "none" && <button className="text-button" type="button" onClick={() => answerDefense(target.id)}>I can answer {target.name}’s defense</button>}</section>; })}
+                {allCombatFog && <label className="check-label loss-override"><input type="checkbox" checked={ignoreFog} onChange={(event) => setIgnoreFog(event.target.checked)} />An effect makes some damage unpreventable. I will enter only the actual damage. Otherwise, every unanswered Fog prevents damage to all defenders.</label>}
               </div>
             )}
 
             {defense && (
-              <form className="damage-confirm" id="outgoing-damage-form" key={`${defenseRollCounter}-${defense.type}`} onSubmit={applyOutgoingDamage}>
+              <form className="damage-confirm" id="outgoing-damage-form" key={`${defenseRollCounter}-${allCombatFog && !ignoreFog}`} onSubmit={applyOutgoingDamage}>
                 <div className="response-heading"><span className="eyebrow">Damage that gets through</span>{outgoingDamageTerms.length > 0 && <GlossaryHelp terms={outgoingDamageTerms} />}</div>
                 <p>Override these defaults after resolving blocks, removal, prevention, replacement effects, and damage assignment in your playtester.</p>
-                <CombatDamageFields prefix="outgoing" steps={outgoingDamageSteps} commanderLabels={USER_COMMANDER_LABELS} />
-                <label className="check-label loss-override"><input name="outgoing-loss-protected" type="checkbox" defaultChecked={game.opponents.find((opponent) => opponent.id === combatTarget)?.lossProtected} />An ongoing rule or effect says this defender can’t lose. Keep tracking lethal totals until that effect ends.</label>
-                <p className="boundary-note">This submission records only {game.opponents.find((opponent) => opponent.id === combatTarget)?.name ?? "the selected defender"}. Submit other defenders or extra combats separately.</p>
+                {outgoingGroups.map((group) => <fieldset className="defender-damage" key={`${group.target.id}-${defenseAnswered.includes(group.target.id)}`}><legend>Damage to {group.target.name}</legend><CombatDamageFields prefix={group.prefix} steps={group.steps} commanderLabels={USER_COMMANDER_LABELS} /><label className="check-label loss-override"><input name={`${group.prefix}-loss-protected`} type="checkbox" defaultChecked={group.target.lossProtected} />An ongoing rule or effect says {group.target.name} can’t lose. Keep tracking lethal totals until that effect ends.</label></fieldset>)}
+                <p className="boundary-note">Apply records all defenders and lifelink once. One Undo restores the whole combat. Resolve board-dependent triggers and replacements in your playtester first.</p>
               </form>
             )}
           </div>

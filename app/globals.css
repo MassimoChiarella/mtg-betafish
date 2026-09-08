@@ -837,3 +837,5 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .due-effects article { padding-block: 12px; border-top: 1px solid var(--line); }
 .due-effects article small { display: block; margin-top: 6px; font-size: 14px; }
 .turn-strip > small { font-size: 14px; }
+.defender-damage { min-width: 0; border: 1px solid var(--line); padding: 14px; margin-block: 18px; }
+.defender-damage > legend { font-weight: 700; padding-inline: 6px; }
