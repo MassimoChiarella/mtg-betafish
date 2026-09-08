@@ -1,5 +1,28 @@
 import { decodeGameState, type GameState } from "./session.ts";
 
+export const MAX_SESSION_BYTES = 1024 * 1024;
+export const backupKey = (key: string) => `${key}:backup`;
+export const rejectedKey = (key: string) => `${key}:rejected`;
+const withinSizeLimit = (raw: string) => raw.length <= MAX_SESSION_BYTES && new TextEncoder().encode(raw).byteLength <= MAX_SESSION_BYTES;
+
+export function exportSession(state: GameState) {
+  const decoded = decodeGameState(state);
+  if (!decoded) throw new Error("This session cannot be exported safely.");
+  const serialized = JSON.stringify({ format: "mtg-betafish-session", state: decoded }, null, 2);
+  if (!withinSizeLimit(serialized)) throw new Error("This session exceeds the 1 MiB file limit.");
+  return serialized;
+}
+
+export function importSession(raw: string): GameState | null {
+  if (!withinSizeLimit(raw)) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== "object" || !("format" in value)) return readStoredSession(raw)?.state ?? null;
+    if (value.format !== "mtg-betafish-session" || !("state" in value)) return null;
+    return decodeGameState(value.state);
+  } catch { return null; }
+}
+
 export type StoredSession = {
   revision: number;
   state: GameState;
@@ -19,6 +42,7 @@ export function serializeGameState(state: GameState) {
 }
 
 export function readStoredSession(raw: string): StorageConflict | null {
+  if (!withinSizeLimit(raw)) return null;
   try {
     const parsed: unknown = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && "revision" in parsed && "state" in parsed) {
@@ -62,12 +86,17 @@ export function hasCompetingStoredSession(stored: StorageConflict, observedRevis
   return stored.revision >= observedRevision && stored.serialized !== savedSerialization;
 }
 
-export function writeStoredSession(storage: Pick<Storage, "setItem">, key: string, revision: number, state: GameState) {
+export function writeStoredSession(storage: Pick<Storage, "setItem"> & Partial<Pick<Storage, "getItem">>, key: string, revision: number, state: GameState) {
   if (!Number.isSafeInteger(revision) || revision < 0) return false;
   const decoded = decodeGameState(state);
   if (!decoded) return false;
   try {
-    storage.setItem(key, JSON.stringify({ revision, state: decoded } satisfies StoredSession));
+    const serialized = JSON.stringify({ revision, state: decoded } satisfies StoredSession);
+    if (!withinSizeLimit(serialized)) return false;
+    const previous = storage.getItem?.(key);
+    // Preserve recoverable data before replacing it; a failed backup aborts the save.
+    if (previous) storage.setItem(readStoredSession(previous) ? backupKey(key) : rejectedKey(key), previous);
+    storage.setItem(key, serialized);
     return true;
   } catch {
     return false;

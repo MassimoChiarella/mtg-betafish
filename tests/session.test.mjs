@@ -1,9 +1,39 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decodeGameState, GAME_STATE_VERSION } from "../app/session.ts";
+import { decodeGameState, GAME_STATE_VERSION, CATALOG_REVISION } from "../app/session.ts";
 import { developmentEvent, EVENT_TEMPLATES } from "../app/simulator.ts";
 
 const SIGNATURE_USE_TEMPLATE_ID = "signature-card-encounter";
+
+test("v6 catalog migration preserves protected lethal totals and paid casting costs", () => {
+  const old = currentState(); old.version = 6; delete old.catalogRevision;
+  old.userLife = 0; old.opponents[0].life = 0;
+  old.currentEvent = eventFromTemplate("minus-wipe");
+  old.currentEvent.title = "Previous catalog wording";
+  old.toxicDelugePayment = { eventId: old.currentEvent.id, amount: 5 };
+  const migrated = decodeGameState(old);
+  assert.ok(migrated);
+  assert.equal(migrated.userLossProtected, true);
+  assert.equal(migrated.opponents[0].lossProtected, true);
+  assert.equal(migrated.opponents[0].eliminated, false);
+  assert.equal(migrated.toxicDelugePayment.amount, 5);
+  assert.equal(migrated.responseStage, "choose");
+  assert.deepEqual(decodeGameState(migrated), migrated);
+});
+
+test("catalog copy migration refreshes both threat copies without resetting its clock", () => {
+  const old = currentState(); old.catalogRevision = 0;
+  old.currentEvent = eventFromTemplate("combo-clock");
+  old.currentEvent.title = "Old title"; old.currentEvent.threat.title = "Old title";
+  old.activeThreat = { ...old.currentEvent.threat, remaining: 1, delayed: true };
+  old.responseStage = "resolved";
+  const migrated = decodeGameState(old);
+  assert.ok(migrated);
+  assert.equal(migrated.activeThreat.title, migrated.currentEvent.title);
+  assert.equal(migrated.activeThreat.remaining, 1);
+  assert.equal(migrated.activeThreat.delayed, true);
+  assert.equal(decodeGameState({ ...migrated, catalogRevision: CATALOG_REVISION + 1 }), null);
+});
 
 function eventFromTemplate(templateId, sourceId = "one", sourceName = "One") {
   const template = EVENT_TEMPLATES.find(({ id }) => id === templateId);
@@ -37,6 +67,7 @@ function eventFromTemplate(templateId, sourceId = "one", sourceName = "One") {
 function currentState() {
   return {
     version: GAME_STATE_VERSION,
+    catalogRevision: CATALOG_REVISION,
     turn: 6,
     eventCounter: 9,
     defenseCounter: 3,
@@ -301,7 +332,7 @@ test("representative v1-v5 states migrate fields and canonical copy without losi
       const decoded = decodeGameState(raw);
 
       assert.ok(decoded);
-      assert.equal(decoded.version, 6);
+      assert.equal(decoded.version, GAME_STATE_VERSION);
       assert.equal(decoded.seed, raw.seed);
       assert.equal(decoded.currentEvent.id, raw.currentEvent.id);
       assert.equal(decoded.currentEvent.templateId, raw.currentEvent.templateId);
@@ -743,7 +774,7 @@ test("structural duplicate classes and cross-field contradictions fail closed", 
 
 test("malformed current state fails closed at every persistence boundary", async (t) => {
   const cases = [
-    ["unsupported version", (state) => { state.version = 7; }],
+    ["unsupported version", (state) => { state.version = GAME_STATE_VERSION + 1; }],
     ["fractional version", (state) => { state.version = 5.5; }],
     ["zero turn", (state) => { state.turn = 0; }],
     ["unsafe event counter", (state) => { state.eventCounter = Number.MAX_SAFE_INTEGER + 1; }],

@@ -33,11 +33,17 @@ import {
 } from "./simulator";
 import {
   GAME_STATE_VERSION,
+  CATALOG_REVISION,
   type GameState,
   type HistoryEntry,
   type HistoryTone,
 } from "./session";
 import {
+  backupKey,
+  rejectedKey,
+  exportSession,
+  importSession,
+  MAX_SESSION_BYTES,
   decideStorageEvent,
   hasCompetingStoredSession,
   newestStoredSession,
@@ -98,6 +104,7 @@ function createInitialGame(seed = "GILDED-732", opponents: readonly Opponent[] =
   });
   return {
     version: GAME_STATE_VERSION,
+    catalogRevision: CATALOG_REVISION,
     turn: 1,
     eventCounter: 1,
     defenseCounter: 0,
@@ -448,7 +455,10 @@ export default function Home() {
   const attackerNameInput = useRef<HTMLInputElement>(null);
   const outgoingList = useRef<HTMLDivElement>(null);
 
-  const [activeModal, setActiveModal] = useState<"settings" | "library" | "combat" | "totals" | "reset" | null>(null);
+  const [activeModal, setActiveModal] = useState<"settings" | "library" | "combat" | "totals" | "reset" | "sessions" | null>(null);
+  const [importedSession, setImportedSession] = useState<GameState | null>(null);
+  const [sessionMessage, setSessionMessage] = useState("");
+  const importRequest = useRef(0);
   const [settingsOpponents, setSettingsOpponents] = useState<Opponent[]>([]);
   const [settingsSeed, setSettingsSeed] = useState("");
   const [settingsNameError, setSettingsNameError] = useState("");
@@ -484,7 +494,6 @@ export default function Home() {
       if (saved) {
         const stored = readStoredSession(saved);
         if (!stored) {
-          window.localStorage.removeItem(STORAGE_KEY);
           const revision = 1;
           if (writeStoredSession(window.localStorage, STORAGE_KEY, revision, gameRef.current)) {
             storageRevision.current = revision;
@@ -534,7 +543,6 @@ export default function Home() {
               queueMicrotask(() => setSaveStatus("unsaved"));
               return;
             }
-            if (decision.expectedRaw !== null) window.localStorage.removeItem(STORAGE_KEY);
             discardedInvalid = decision.expectedRaw !== null;
           }
         }
@@ -570,7 +578,6 @@ export default function Home() {
         const decision = decideStorageEvent(event.newValue, window.localStorage.getItem(STORAGE_KEY));
         if (decision.action === "restore") {
             if (window.localStorage.getItem(STORAGE_KEY) !== decision.expectedRaw) return;
-            if (decision.expectedRaw !== null) window.localStorage.removeItem(STORAGE_KEY);
             const revision = nextStorageRevision(storageRevision.current);
             if (revision === null || !writeStoredSession(window.localStorage, STORAGE_KEY, revision, gameRef.current)) {
               setSaveStatus("unsaved");
@@ -645,7 +652,6 @@ export default function Home() {
             setSaveStatus("unsaved");
             return;
           }
-          window.localStorage.removeItem(STORAGE_KEY);
         }
       }
       const revision = nextStorageRevision(storageRevision.current, storageConflict.revision, stored?.revision ?? 0);
@@ -933,6 +939,46 @@ export default function Home() {
       setPendingOutcome(null);
       setOutcomeError("");
     } catch (error) { setOutcomeError(error instanceof Error ? error.message : "Check the spell outcome."); }
+  }
+
+  function downloadSession(raw?: string, filename = `betafish-${game.seed.replace(/[^a-z0-9-]/gi, "_")}-round-${game.turn}.json`) {
+    try {
+      const url = URL.createObjectURL(new Blob([raw ?? exportSession(game)], { type: "application/json" }));
+      const link = document.createElement("a"); link.href = url; link.download = filename; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) { setSessionMessage(error instanceof Error ? error.message : "Export failed."); }
+  }
+
+  async function chooseSessionFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    const request = ++importRequest.current;
+    event.currentTarget.value = "";
+    setImportedSession(null);
+    if (!file) return;
+    if (file.size > MAX_SESSION_BYTES) { setSessionMessage("Choose a session file smaller than 1 MiB."); return; }
+    try {
+      const imported = importSession(await file.text());
+      if (request !== importRequest.current) return;
+      if (!imported) { setSessionMessage("This file is invalid or requires a newer app version. Your current run is unchanged."); return; }
+      setImportedSession(imported); setSessionMessage("");
+    } catch { setSessionMessage("The file could not be read. Your current run is unchanged."); }
+  }
+
+  function recoverSession() {
+    importRequest.current++;
+    try {
+      const raw = window.localStorage.getItem(backupKey(STORAGE_KEY));
+      const stored = raw ? readStoredSession(raw) : null;
+      setImportedSession(stored?.state ?? null);
+      setSessionMessage(stored ? "Review this previous save before restoring it." : "No valid previous save is available on this device.");
+    } catch { setSessionMessage("Browser storage is unavailable."); }
+  }
+
+  function restoreImportedSession() {
+    if (!importedSession || storageConflict) return;
+    commit(() => importedSession);
+    setPendingOutcome(null); setToxicPaymentDraft({ eventId: "", value: "0" }); setToxicPaymentError("");
+    setImportedSession(null); setActiveModal(null);
   }
 
   function applyIncoming(steps: readonly CombatDamageStep[], label: string, answered = false, lossProtected = game.userLossProtected) {
@@ -1555,7 +1601,7 @@ export default function Home() {
     saved: "Saved locally",
     unsaved: "Changes are not saved",
     conflict: "Save conflict needs a choice",
-    discarded: "Invalid saved draft discarded",
+    discarded: "Incompatible draft preserved in Save / restore",
   };
   const liveMessage = (activeModal === "combat" && defense ? `Defense roll: ${defense.title}. ${defense.detail}` : null)
     ?? (game.responseStage === "counterback" ? "Your counter was countered. Choose whether to counter again or let the original action resolve." : null)
@@ -1802,9 +1848,24 @@ export default function Home() {
       <footer className="session-footer">
         <span>Session seed <b>{game.seed}</b></span>
         <button type="button" onClick={() => setActiveModal("library")}>Scenario library · {CARD_LIBRARY_UPDATED}</button>
+        <button type="button" onClick={() => { setImportedSession(null); setSessionMessage(""); setActiveModal("sessions"); }}>Save / restore</button>
         <span className={`save-status save-status-${saveStatus}`} role="status">{hydrated ? saveStatusText[saveStatus] : "Loading saved session…"}</span>
         <button className="footer-restart" type="button" aria-haspopup="dialog" onClick={() => setActiveModal("reset")}>Restart session</button>
       </footer>
+
+      {activeModal === "sessions" && (
+        <Modal title="Save and restore sessions" subtitle="Files and backups stay on your device. Importing replaces this run after you confirm; Undo restores it." onClose={() => setActiveModal(null)}>
+          {storageConflictNotice}
+          <div className="correction-form">
+            <button type="button" className="secondary-button" onClick={() => downloadSession()}>Export current session</button>
+            <label>Import session file<input type="file" accept=".json,application/json" onChange={chooseSessionFile} /></label>
+            <button type="button" className="secondary-button" onClick={recoverSession}>Recover previous save</button>
+            <button type="button" className="text-button" onClick={() => { try { const raw = window.localStorage.getItem(rejectedKey(STORAGE_KEY)); if (raw) downloadSession(raw, "betafish-rejected-save.json"); else setSessionMessage("No rejected save is stored."); } catch { setSessionMessage("Browser storage is unavailable."); } }}>Download preserved incompatible save</button>
+            {sessionMessage && <p role="status">{sessionMessage}</p>}
+            {importedSession && <section><h3>Ready to restore</h3><p>Seed {importedSession.seed} · round {importedSession.turn} · {importedSession.userLife} life · {importedSession.opponents.map((opponent) => opponent.name).join(", ")}</p><button className="primary-button" type="button" onClick={restoreImportedSession} disabled={Boolean(storageConflict)}>Replace run with this session</button></section>}
+          </div>
+        </Modal>
+      )}
 
       {pendingOutcome && !game.gameOver && (
         <Modal title="Confirm spell outcome" subtitle="Resolve the response in your playtester, then record what actually happened." onClose={() => { setPendingOutcome(null); setOutcomeError(""); }}>
@@ -1945,6 +2006,7 @@ export default function Home() {
           {storageConflictNotice}
           <div className="session-summary"><span><b>{game.turn}</b> {game.turn === 1 ? "round" : "rounds"} reached</span><span><b>{game.answeredCount}</b> threats/actions answered</span><span><b>{game.userLife}</b> life · <b>{game.userPoisonCounters}</b> poison</span></div>
           {(userDefeated || tableDefeated) && <p className="terminal-guidance">If the recorded totals or an ongoing can’t-lose effect were missed, correct the affected player. Safe corrected totals can restore an eliminated opponent after a reload.</p>}
+          <button className="text-button" type="button" onClick={() => { setImportedSession(null); setSessionMessage(""); setActiveModal("sessions"); }}>Save / restore</button>
           <div className="modal-actions">{canUndo && <button className="secondary-button" type="button" onClick={undo}>Undo last change</button>}{(userDefeated || tableDefeated) && <button className="secondary-button" type="button" onClick={() => openCorrection(terminalCorrectionTarget)}>Correct tracked totals</button>}{!tableDefeated && !userDefeated && <button className="secondary-button" type="button" onClick={continueAfterGameOver}>Continue anyway</button>}<button className="primary-button" type="button" onClick={resetSession}>Start a new run <span aria-hidden="true">→</span></button></div>
         </Modal>
       )}

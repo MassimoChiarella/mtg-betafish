@@ -17,7 +17,8 @@ import {
   type Threat,
 } from "./simulator.ts";
 
-export const GAME_STATE_VERSION = 6 as const;
+export const GAME_STATE_VERSION = 7 as const;
+export const CATALOG_REVISION = 1;
 
 export type ResponseStage = "prompt" | "choose" | "counterback" | "combat" | "resolved";
 export type HistoryTone = "success" | "damage" | "warning" | "neutral";
@@ -32,6 +33,7 @@ export type HistoryEntry = {
 
 export type GameState = {
   version: typeof GAME_STATE_VERSION;
+  catalogRevision: number;
   turn: number;
   eventCounter: number;
   defenseCounter: number;
@@ -152,11 +154,11 @@ function readOpponent(value: unknown, version: number): Opponent | undefined {
     poisonCounters,
     commanderDamage,
   }) !== null;
-  const lossProtected = version < GAME_STATE_VERSION
+  const lossProtected = version < 6
     ? false
     : typeof value.lossProtected === "boolean" ? value.lossProtected : undefined;
   if (lossProtected === undefined
-    || (version === GAME_STATE_VERSION && hasUnprotectedLoss && !lossProtected && !value.eliminated)) return undefined;
+    || (version >= 6 && hasUnprotectedLoss && !lossProtected && !value.eliminated)) return undefined;
 
   return {
     id: value.id,
@@ -167,7 +169,7 @@ function readOpponent(value: unknown, version: number): Opponent | undefined {
     commanderDamage,
     poisonCounters,
     lossProtected,
-    eliminated: value.eliminated || (version < GAME_STATE_VERSION && hasUnprotectedLoss),
+    eliminated: value.eliminated || (version < 6 && hasUnprotectedLoss),
   };
 }
 
@@ -210,7 +212,7 @@ function readAttacker(value: unknown, sourceId: string, sourceName: string, vers
       attacker.commanderLabel = `${sourceName}’s partner commander`;
     } else if (value.commanderLabel !== undefined) {
       attacker.commanderLabel = value.commanderLabel as string;
-    } else if (version < GAME_STATE_VERSION) {
+    } else if (version < 6) {
       attacker.commanderLabel = isNonemptyString(value.name) ? value.name : "Original commander identity";
     } else {
       return undefined;
@@ -219,7 +221,7 @@ function readAttacker(value: unknown, sourceId: string, sourceName: string, vers
   return attacker;
 }
 
-function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: number): StoredEvent | undefined {
+function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: number, catalogRevision: number): StoredEvent | undefined {
   if (!isRecord(value)
     || !isNonemptyString(value.id)
     || !isNonemptyString(value.templateId)
@@ -273,7 +275,7 @@ function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: nu
     || (value.templateId === "table-development" && value.kind !== "development")
     || (value.templateId === SIGNATURE_USE_TEMPLATE_ID && value.kind !== "signature")) return undefined;
   if (template && template.kind !== value.kind) return undefined;
-  if (template && version === GAME_STATE_VERSION
+  if (template && catalogRevision === CATALOG_REVISION
     && (value.title !== template.title
       || value.prompt !== template.prompt
       || value.card !== template.card
@@ -282,7 +284,7 @@ function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: nu
       || value.emptyOutcome !== template.emptyOutcome)) return undefined;
   if (value.kind === "signature"
     && (!dynamicMetadata
-      || (version === GAME_STATE_VERSION
+      || (version >= 6
         && (!responseOptions
           || !hasSameStrings(responseOptions, dynamicMetadata.responseOptions)
           || value.emptyOutcome !== dynamicMetadata.emptyOutcome)))) return undefined;
@@ -301,7 +303,7 @@ function readEvent(value: unknown, opponentIds: ReadonlySet<string>, version: nu
   if (value.kind !== "attack" && value.kind !== "development" && metadata.responseOptions.length === 0) return undefined;
 
   if (threat && template) {
-    if (version === GAME_STATE_VERSION
+    if (catalogRevision === CATALOG_REVISION
       && (threat.ownerId !== value.sourceId || threat.title !== template.title || threat.description !== template.prompt)) return undefined;
     threat = {
       ...threat,
@@ -360,6 +362,8 @@ export function decodeGameState(raw: unknown): GameState | null {
   try {
     if (!isRecord(raw) || typeof raw.version !== "number" || !Number.isSafeInteger(raw.version) || raw.version < 1 || raw.version > GAME_STATE_VERSION) return null;
     const version = raw.version;
+    const catalogRevision = version < 7 ? 0 : raw.catalogRevision;
+    if (!isCount(catalogRevision) || catalogRevision > CATALOG_REVISION) return null;
     if (typeof raw.turn !== "number" || !Number.isSafeInteger(raw.turn) || raw.turn < 1
       || typeof raw.eventCounter !== "number" || !Number.isSafeInteger(raw.eventCounter) || raw.eventCounter < 1
       || !isCount(raw.defenseCounter)
@@ -379,12 +383,12 @@ export function decodeGameState(raw: unknown): GameState | null {
     const opponentIds = new Set(opponents.map(({ id }) => id));
     let gameOver = raw.gameOver as string | null;
     if (opponents.every((opponent) => opponent.eliminated)) {
-      if (version === GAME_STATE_VERSION && gameOver === null) return null;
-      if (version < GAME_STATE_VERSION && gameOver === null) gameOver = "You eliminated every simulated opponent.";
+      if (version >= 6 && gameOver === null) return null;
+      if (version < 6 && gameOver === null) gameOver = "You eliminated every simulated opponent.";
     }
 
     const userCommanderDamage = readDamageLedger(raw.userCommanderDamage);
-    const currentEvent = readEvent(raw.currentEvent, opponentIds, version);
+    const currentEvent = readEvent(raw.currentEvent, opponentIds, version, catalogRevision);
     const recentTemplateIds = readStringArray(raw.recentTemplateIds, true);
     const history = readHistory(raw.history);
     if (!userCommanderDamage || !currentEvent || !recentTemplateIds || !history) return null;
@@ -392,12 +396,12 @@ export function decodeGameState(raw: unknown): GameState | null {
     let activeThreat: Threat | null;
     if (raw.activeThreat === null) activeThreat = null;
     else {
-      const legacyExpiredTerminal = version < GAME_STATE_VERSION && isNonemptyString(raw.gameOver);
+      const legacyExpiredTerminal = version < 6 && isNonemptyString(raw.gameOver);
       const parsedThreat = readThreat(raw.activeThreat, opponentIds, legacyExpiredTerminal);
       if (!parsedThreat) return null;
       activeThreat = parsedThreat.remaining === 0 ? null : parsedThreat;
     }
-    if (version < GAME_STATE_VERSION && activeThreat && currentEvent.threat && activeThreat.id === currentEvent.threat.id) {
+    if (catalogRevision < CATALOG_REVISION && activeThreat && currentEvent.threat && activeThreat.id === currentEvent.threat.id) {
       activeThreat = {
         ...activeThreat,
         ownerId: currentEvent.threat.ownerId,
@@ -405,7 +409,7 @@ export function decodeGameState(raw: unknown): GameState | null {
         description: currentEvent.threat.description,
       };
     }
-    if (version < GAME_STATE_VERSION && activeThreat && opponents.some((opponent) => opponent.id === activeThreat?.ownerId && opponent.eliminated)) {
+    if (version < 6 && activeThreat && opponents.some((opponent) => opponent.id === activeThreat?.ownerId && opponent.eliminated)) {
       activeThreat = null;
     }
 
@@ -416,14 +420,14 @@ export function decodeGameState(raw: unknown): GameState | null {
       ? responseStage === "counterback" ? 1 : 0
       : isCount(raw.counterExchange) ? raw.counterExchange : undefined;
     if (counterExchange === undefined) return null;
-    if (version < GAME_STATE_VERSION && eventSource?.eliminated && responseStage !== "resolved") {
+    if (version < 6 && eventSource?.eliminated && responseStage !== "resolved") {
       responseStage = "resolved";
       resolution = `${eventSource.name} left the game, so their pending action was removed from the stack or combat during migration.`;
       counterExchange = 0;
     }
     let toxicDelugePayment: GameState["toxicDelugePayment"] = null;
     const missingToxicDelugePayment = raw.toxicDelugePayment === undefined;
-    if (version === GAME_STATE_VERSION) {
+    if (version >= 6) {
       if (!missingToxicDelugePayment && raw.toxicDelugePayment !== null) {
         if (!isRecord(raw.toxicDelugePayment)
           || !isNonemptyString(raw.toxicDelugePayment.eventId)
@@ -434,7 +438,7 @@ export function decodeGameState(raw: unknown): GameState | null {
     if (currentEvent.templateId === "minus-wipe"
       && (responseStage === "choose" || responseStage === "counterback")
       && !toxicDelugePayment
-      && (version < GAME_STATE_VERSION || missingToxicDelugePayment)) {
+      && (version < 6 || missingToxicDelugePayment)) {
       responseStage = "prompt";
       resolution = "Re-enter Toxic Deluge’s life payment before opening the response window.";
       counterExchange = 0;
@@ -476,7 +480,7 @@ export function decodeGameState(raw: unknown): GameState | null {
     const userPoisonCounters = version < 5
       ? 0
       : isCount(raw.userPoisonCounters) ? raw.userPoisonCounters : undefined;
-    const userLossProtected = version < GAME_STATE_VERSION
+    const userLossProtected = version < 6
       ? false
       : typeof raw.userLossProtected === "boolean" ? raw.userLossProtected : undefined;
     if (userPoisonCounters === undefined || counterExchange === undefined || userLossProtected === undefined) return null;
@@ -485,8 +489,8 @@ export function decodeGameState(raw: unknown): GameState | null {
       poisonCounters: userPoisonCounters,
       commanderDamage: userCommanderDamage,
     }, userLossProtected);
-    if (version === GAME_STATE_VERSION && gameOver === null && userLoss) return null;
-    if (version < GAME_STATE_VERSION && gameOver === null && userLoss) {
+    if (version >= 6 && gameOver === null && userLoss) return null;
+    if (version < 6 && gameOver === null && userLoss) {
       gameOver = userLoss.reason === "life"
         ? `You reached ${raw.userLife} life.`
         : userLoss.reason === "poison"
@@ -505,6 +509,7 @@ export function decodeGameState(raw: unknown): GameState | null {
 
     return {
       version: GAME_STATE_VERSION,
+      catalogRevision: CATALOG_REVISION,
       turn: raw.turn,
       eventCounter: raw.eventCounter,
       defenseCounter: raw.defenseCounter,

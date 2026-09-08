@@ -92,7 +92,7 @@ test("game-over recovery preserves the expired round event, undo, correction, an
 
   const hydration = sourceSection(pageSource, "// Persistence is best-effort", "// Move focus only");
   assert.match(hydration, /readStoredSession\(saved\)/);
-  assert.match(hydration, /window\.localStorage\.removeItem\(STORAGE_KEY\)/);
+  assert.doesNotMatch(hydration, /window\.localStorage\.removeItem\(STORAGE_KEY\)/);
   assert.match(pageSource, /applyIncoming\(zeroCombatSteps\(incomingDamageSteps\), "Combat prevented", true\)/);
   assert.match(sourceSection(pageSource, "function stopThreat()", "function delayThreat()"), /answeredCount: addSafeInteger\(previous\.answeredCount, 1\)/);
   assert.match(sourceSection(pageSource, "function answerDefense()", "function applyOutgoingDamage("), /setDefenseAnswered\(true\)/);
@@ -227,7 +227,7 @@ test("local persistence uses revision envelopes, raw legacy reads, and explicit 
   assert.equal((sourceSection(pageSource, "function loadSavedConflict()", "// Move focus only").match(/encounterHeading\.current\?\.focus\(\)/g) ?? []).length, 2);
   assert.match(pageSource, /const storageConflictNotice = storageConflict \?/);
   assert.match(pageSource, /\{!hasOpenDialog && storageConflictNotice\}/);
-  assert.equal((pageSource.match(/\{storageConflictNotice\}/g) ?? []).length, 7);
+  assert.equal((pageSource.match(/\{storageConflictNotice\}/g) ?? []).length, 8);
   assert.match(pageSource, />Load saved version<\/button>/);
   assert.match(pageSource, />Keep this tab<\/button>/);
   assert.match(startRun, /createInitialGame\(seed, opponents\.map/);
