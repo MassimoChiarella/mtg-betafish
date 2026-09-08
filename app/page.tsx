@@ -47,7 +47,8 @@ import {
   writeStoredSession,
   type StorageConflict,
 } from "./storage-session";
-import { scryfallImageUrl } from "./scryfall";
+import { scryfallImageUrl, scryfallReferenceUrl } from "./scryfall";
+import { spellOutcome, type SpellResult } from "./spell-outcome";
 
 type OutgoingAttacker = {
   id: string;
@@ -242,10 +243,11 @@ function CardPreview({ name, lookupName = name }: { name: string; lookupName?: s
   const previewId = useId();
   const [loadedImage, setLoadedImage] = useState<string>();
   const [failedImage, setFailedImage] = useState<string>();
+  const [retry, setRetry] = useState(0);
 
   if (!lookupName) return name;
   const cardName = lookupName;
-  const image = scryfallImageUrl(cardName);
+  const image = scryfallImageUrl(cardName) + (retry ? `&retry=${retry}` : "");
 
   return (
     <span className="card-preview">
@@ -258,7 +260,7 @@ function CardPreview({ name, lookupName = name }: { name: string; lookupName?: s
       >{name}</button>
       <span className="preview-panel card-preview-panel" id={previewId} role="tooltip" popover="auto">
         {loadedImage !== image && failedImage !== image && <span className="card-preview-status" role="status">Loading card image…</span>}
-        {failedImage === image && <span className="card-preview-status" role="status">Card image unavailable.</span>}
+        {failedImage === image && <span className="card-preview-status" role="status">Card image unavailable. <button type="button" onClick={() => setRetry((value) => value + 1)}>Retry image</button> <a href={scryfallReferenceUrl(cardName)} target="_blank" rel="noreferrer">Read {cardName} on Scryfall ↗</a></span>}
         {/* eslint-disable-next-line @next/next/no-img-element -- render the trusted Scryfall image endpoint directly */}
         {failedImage !== image && <img className={loadedImage === image ? "" : "pending"} src={image} alt={`${cardName} card`} decoding="async" loading="lazy" onLoad={() => setLoadedImage(image)} onError={() => setFailedImage(image)} />}
       </span>
@@ -466,6 +468,8 @@ export default function Home() {
   const [outgoingAttackerError, setOutgoingAttackerError] = useState("");
   const [toxicPaymentDraft, setToxicPaymentDraft] = useState<{ eventId: string; value: string }>({ eventId: "", value: "0" });
   const [toxicPaymentError, setToxicPaymentError] = useState("");
+  const [pendingOutcome, setPendingOutcome] = useState<{ answered: boolean } | null>(null);
+  const [outcomeError, setOutcomeError] = useState("");
 
   useEffect(() => {
     gameRef.current = game;
@@ -618,6 +622,8 @@ export default function Home() {
     gameRef.current = selected.state;
     setToxicPaymentDraft({ eventId: "", value: "0" });
     setToxicPaymentError("");
+    setPendingOutcome(null);
+    setOutcomeError("");
     setActiveModal(null);
     setGame(selected.state);
     setStorageConflict(null);
@@ -771,6 +777,7 @@ export default function Home() {
 
   function recordEmptyOutcome() {
     const event = game.currentEvent;
+    if (event.kind === "targeted") { setPendingOutcome({ answered: false }); return; }
     if (event.templateId === "minus-wipe") {
       const payment = readToxicPayment(event);
       if (payment === null) return;
@@ -783,17 +790,10 @@ export default function Home() {
       );
       return;
     }
-    const sourceLifeLoss = event.templateId === "remove-engine" ? 3 : undefined;
-    const accounting = event.templateId === "remove-engine"
-      ? ` ${event.sourceName} loses 3 life after the spell resolves on another legal target.`
-      : "";
     resolveEvent(
       "Action does not affect you",
-      `${event.emptyOutcome ?? "The table action did not affect you."}${accounting}`,
+      event.emptyOutcome ?? "The table action did not affect you.",
       "neutral",
-      sourceLifeLoss === undefined
-        ? {}
-        : (previous) => sourceLifeLossPatch(previous, event, sourceLifeLoss),
     );
     setToxicPaymentError("");
   }
@@ -826,6 +826,7 @@ export default function Home() {
   function letEventResolve() {
     const event = game.currentEvent;
     if (event.kind === "attack") return;
+    if (event.kind === "targeted") { setPendingOutcome({ answered: false }); return; }
     if (event.kind === "development") {
       resolveEvent("Table developed", `${event.sourceName} advances their game plan. Nothing new targets you.`, "neutral");
       return;
@@ -834,12 +835,7 @@ export default function Home() {
       resolveEvent("Threat established", `${event.sourceName}’s ${event.card} is now on a ${event.threat.remaining}-round clock.`, "warning", { activeThreat: event.threat });
       return;
     }
-    if (event.templateId === "early-rock") {
-      const detail = `${event.card} resolves. You gain 4 life; apply the generated outcome in your playtester.`;
-      resolveEvent("Table action resolves", detail, "damage", (previous) => ({ userLife: addSafeInteger(previous.userLife, 4) }));
-      return;
-    }
-    if (event.templateId === "remove-engine" || event.templateId === "minus-wipe") {
+    if (event.templateId === "minus-wipe") {
       const lockedPayment = game.toxicDelugePayment?.eventId === event.id ? game.toxicDelugePayment.amount : undefined;
       const paymentAlreadyRecorded = event.templateId === "minus-wipe" && lockedPayment !== undefined;
       if (event.templateId === "minus-wipe" && game.responseStage !== "prompt" && lockedPayment === undefined) {
@@ -847,11 +843,9 @@ export default function Home() {
         setToxicPaymentError("Re-enter the life payment before reopening the response window.");
         return;
       }
-      const amount = event.templateId === "minus-wipe" ? (paymentAlreadyRecorded ? lockedPayment : readToxicPayment(event)) : 3;
+      const amount = paymentAlreadyRecorded ? lockedPayment : readToxicPayment(event);
       if (amount === null) return;
-      const detail = event.templateId === "remove-engine"
-        ? `${event.card} resolves. ${event.sourceName} loses 3 life; apply the generated outcome in your playtester.`
-        : paymentAlreadyRecorded
+      const detail = paymentAlreadyRecorded
           ? `${event.card} resolves with the ${lockedPayment}-life payment already recorded; apply X = ${lockedPayment} in your playtester.`
           : `${event.sourceName} pays ${amount} life for ${event.card}; apply X = ${amount} in your playtester.`;
       if (event.templateId === "minus-wipe" && !paymentAlreadyRecorded) {
@@ -862,9 +856,7 @@ export default function Home() {
         "Table action resolves",
         detail,
         event.kind === "wipe" ? "warning" : "damage",
-        event.templateId === "remove-engine"
-          ? (previous) => sourceLifeLossPatch(previous, event, amount)
-          : {},
+        {},
       );
       setToxicPaymentError("");
       return;
@@ -917,21 +909,30 @@ export default function Home() {
       redirect: "You changed the target; apply the new target in your playtester.",
       custom: "You supplied another legal answer; apply its exact result in your playtester.",
     };
-    const redirectedAnguishedUnmaking = event.templateId === "remove-engine" && answer === "redirect";
-    const sourceLifeLoss = redirectedAnguishedUnmaking ? 3 : undefined;
+    if (event.kind === "targeted") { setPendingOutcome({ answered: true }); return; }
     const accounting = event.templateId === "minus-wipe"
       ? ` Toxic Deluge’s ${lockedToxicPayment}-life casting cost was already recorded.`
-      : redirectedAnguishedUnmaking
-        ? ` ${event.sourceName} loses 3 life after the redirected spell resolves.`
-        : "";
+      : "";
     resolveEvent(
       "Action answered",
       `${labels[answer]}${accounting}`,
       "success",
-      sourceLifeLoss === undefined ? {} : (previous) => sourceLifeLossPatch(previous, event, sourceLifeLoss),
+      {},
       true,
     );
     setToxicPaymentError("");
+  }
+
+  function confirmSpellOutcome(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!pendingOutcome) return;
+    const data = new FormData(event.currentTarget);
+    try {
+      const outcome = spellOutcome(game, data.get("spell-result") as SpellResult, String(data.get("target-controller")), Number(data.get("target-power") ?? 0));
+      resolveEvent(pendingOutcome.answered ? "Action answered" : "Table action resolves", outcome.detail, pendingOutcome.answered ? "success" : "damage", outcome.patch, pendingOutcome.answered);
+      setPendingOutcome(null);
+      setOutcomeError("");
+    } catch (error) { setOutcomeError(error instanceof Error ? error.message : "Check the spell outcome."); }
   }
 
   function applyIncoming(steps: readonly CombatDamageStep[], label: string, answered = false, lossProtected = game.userLossProtected) {
@@ -1567,7 +1568,7 @@ export default function Home() {
       <div><button type="button" onClick={loadSavedConflict}>Load saved version</button><button type="button" onClick={keepLocalConflict}>Keep this tab</button></div>
     </section>
   ) : null;
-  const hasOpenDialog = Boolean(activeModal || game.gameOver);
+  const hasOpenDialog = Boolean(activeModal || pendingOutcome || game.gameOver);
   return (
     <main className="app-shell">
       <a className="skip-link" href="#main-workspace">Skip to table workspace</a>
@@ -1804,6 +1805,20 @@ export default function Home() {
         <span className={`save-status save-status-${saveStatus}`} role="status">{hydrated ? saveStatusText[saveStatus] : "Loading saved session…"}</span>
         <button className="footer-restart" type="button" aria-haspopup="dialog" onClick={() => setActiveModal("reset")}>Restart session</button>
       </footer>
+
+      {pendingOutcome && !game.gameOver && (
+        <Modal title="Confirm spell outcome" subtitle="Resolve the response in your playtester, then record what actually happened." onClose={() => { setPendingOutcome(null); setOutcomeError(""); }}>
+          {storageConflictNotice}
+          <form className="correction-form" onSubmit={confirmSpellOutcome}>
+            <label>Spell result<select name="spell-result" defaultValue="resolved"><option value="resolved">Resolves on a legal target (including indestructible)</option><option value="illegal">All targets are illegal — does not resolve</option><option value="countered">Countered or removed from the stack</option></select></label>
+            <label>Target’s controller at resolution<select name="target-controller" defaultValue="user"><option value="user">You</option>{livingOpponents.map((opponent) => <option value={opponent.id} key={opponent.id}>{opponent.name}</option>)}</select></label>
+            {game.currentEvent.templateId === "exile-commander" && <label>Exiled creature’s power (last known)<input type="number" name="target-power" step="1" min={Number.MIN_SAFE_INTEGER} max={Number.MAX_SAFE_INTEGER} required defaultValue="0" /><small>Swords to Plowshares gives that controller life equal to its power, with a minimum of zero.</small></label>}
+            <p>Hexproof, blink, or phasing may make a target illegal. Indestructible alone does not; Nature’s Claim still grants life and Beast Within still creates a token.</p>
+            {outcomeError && <p role="alert" className="inline-error">{outcomeError}</p>}
+            <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setPendingOutcome(null)}>Back</button><button className="primary-button" type="submit">Confirm outcome</button></div>
+          </form>
+        </Modal>
+      )}
 
       {activeModal === "settings" && (
         <Modal title="Set up the table" subtitle="Choose one to three matchups. Each profile-and-bracket pairing has its own core-card package, pacing, and interaction frequency." onClose={() => setActiveModal(null)} wide>

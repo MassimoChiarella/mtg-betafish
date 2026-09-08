@@ -4,7 +4,7 @@ This plan implements the agreed application assessment in independently tested, 
 
 ## Milestones
 
-- [ ] **1. Spell outcome accounting and resilient card previews**
+- [x] **1. Spell outcome accounting and resilient card previews**
   - Centralize resolved / countered / illegal-target outcomes and tracked life changes.
   - Confirm target controller and Swords to Plowshares power; distinguish indestructible protection from illegal targets.
   - Preserve additional-cost handling and multiplayer elimination.
@@ -50,3 +50,4 @@ Each implementation milestone updates this file with its verification evidence a
 ## Verification ledger
 
 - **Plan baseline:** clean `main` at `06c35d4`; prior assessment passed build, lint, typecheck and 208 tests. No measured browser latency claim is carried forward from bundle sizes alone.
+- **Milestone 1:** targeted spells now confirm resolution status and target controller, including Swords power and legal indestructible targets; preview failures offer Retry and a Scryfall reference. Production build, lint, typecheck and all 212 Node tests pass. Browser workflow coverage follows in milestone 3.

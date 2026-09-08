@@ -227,7 +227,7 @@ test("local persistence uses revision envelopes, raw legacy reads, and explicit 
   assert.equal((sourceSection(pageSource, "function loadSavedConflict()", "// Move focus only").match(/encounterHeading\.current\?\.focus\(\)/g) ?? []).length, 2);
   assert.match(pageSource, /const storageConflictNotice = storageConflict \?/);
   assert.match(pageSource, /\{!hasOpenDialog && storageConflictNotice\}/);
-  assert.equal((pageSource.match(/\{storageConflictNotice\}/g) ?? []).length, 6);
+  assert.equal((pageSource.match(/\{storageConflictNotice\}/g) ?? []).length, 7);
   assert.match(pageSource, />Load saved version<\/button>/);
   assert.match(pageSource, />Keep this tab<\/button>/);
   assert.match(startRun, /createInitialGame\(seed, opponents\.map/);
@@ -265,17 +265,18 @@ test("tracked scenario outcomes and player-facing round language match the simul
   const answering = sourceSection(pageSource, "function answerEvent(", "function applyIncoming(");
   const settings = sourceSection(pageSource, "function configuredSettingsOpponents()", "function saveSettings()");
 
-  assert.match(resolution, /event\.templateId === "early-rock"[\s\S]*?userLife: addSafeInteger\(previous\.userLife, 4\)/);
+  assert.match(resolution, /event\.kind === "targeted"[\s\S]*?setPendingOutcome/);
   assert.match(accounting, /toxicPaymentDraft\.eventId === event\.id/);
   assert.match(accounting, /const life = addSafeInteger\(opponent\.life, -amount\)/);
-  assert.match(accounting, /function recordEmptyOutcome\(\)[\s\S]*?"minus-wipe"[\s\S]*?"remove-engine"[\s\S]*?sourceLifeLossPatch/);
+  assert.match(accounting, /function recordEmptyOutcome\(\)[\s\S]*?setPendingOutcome[\s\S]*?"minus-wipe"[\s\S]*?resolveToxicFromPrompt/);
   assert.match(accounting, /function beginResponse\(\)[\s\S]*?readToxicPayment\(event\)[\s\S]*?sourceLifeLossPatch[\s\S]*?responseStage: sourceEliminated \? "resolved" : "choose"/);
   assert.match(accounting, /function resolveToxicFromPrompt\([\s\S]*?sourceEliminated[\s\S]*?spell was removed from the stack/);
-  assert.match(resolution, /event\.templateId === "remove-engine" \|\| event\.templateId === "minus-wipe"/);
+  assert.match(resolution, /event\.templateId === "minus-wipe"/);
   assert.match(resolution, /paymentAlreadyRecorded/);
   assert.doesNotMatch(answering, /readToxicPayment\(event\)/);
   assert.match(answering, /Toxic Deluge’s \$\{lockedToxicPayment\}-life casting cost was already recorded/);
-  assert.match(answering, /event\.templateId === "remove-engine" && answer === "redirect"/);
+  assert.match(answering, /event\.kind === "targeted"[\s\S]*?setPendingOutcome\(\{ answered: true \}\)/);
+  assert.match(answering, /spellOutcome\(game,/);
   assert.match(pageSource, /Owner: \{activeThreatOwner\.name\}/);
   assert.match(settings, /new Set\(normalizedNames\)\.size !== normalizedNames\.length/);
   assert.match(pageSource, /Scenario card:/);

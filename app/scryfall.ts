@@ -1,5 +1,9 @@
 const normalizeCardName = (name: string) => name.replace(/[’‘]/g, "'");
 
+export function scryfallReferenceUrl(name: string) {
+  return `https://scryfall.com/search?q=${encodeURIComponent(`!"${normalizeCardName(name)}"`)}`;
+}
+
 export function scryfallImageUrl(name: string) {
   const url = new URL("https://api.scryfall.com/cards/named");
   url.searchParams.set("exact", normalizeCardName(name));
